@@ -32,6 +32,8 @@ export interface LaunchOptions extends ServerOptions {
   cliPath?: string;
   /** AbortSignal to cancel the debugger investigation */
   signal?: AbortSignal;
+  /** Additional instructions to include in the investigation prompt */
+  extraInstructions?: string;
 }
 
 /**

@@ -9,8 +9,9 @@
 
 import { Experimental_Agent as Agent } from 'ai';
 import { experimental_createMCPClient as createMCPClient } from '@ai-sdk/mcp';
-import { claudeCode } from 'ai-sdk-provider-claude-code';
 import { parseArgs } from 'node:util';
+import { loadConfig } from './config.js';
+import { createModel } from './providers.js';
 
 function emitStderr(message: any) {
   console.error(JSON.stringify({ ...message, timestamp: new Date().toISOString() }));
@@ -52,12 +53,19 @@ async function main() {
   });
 
   try {
+    // Load configuration
+    const config = await loadConfig();
+    emitStderr({ type: 'log', message: `Using provider: ${config.provider}${config.model ? ` (${config.model})` : ''}` });
+
+    // Create model from config
+    const model = await createModel(config);
+
     // Get tools from the MCP server
     const mcpTools = await mcpClient.tools();
 
-    // Create agent with Claude Code provider and MCP tools
+    // Create agent with configured provider and MCP tools
     const agent = new Agent({
-      model: claudeCode('sonnet'),
+      model,
       tools: mcpTools,
       // No stop condition - let it run until completion
     });

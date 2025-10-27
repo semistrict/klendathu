@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**klendathu** is a runtime debugger that uses Claude and the Model Context Protocol (MCP) to investigate errors in Node.js applications. When an error occurs, it spawns an MCP server that provides an `eval` tool for inspecting error context, then launches a CLI that connects Claude to investigate.
+**klendathu** is a runtime debugger that uses AI and the Model Context Protocol (MCP) to investigate errors in Node.js applications. When an error occurs, it spawns an MCP server that provides an `eval` tool for inspecting error context, then launches a CLI that connects an AI provider to investigate.
+
+Built with the [Vercel AI SDK](https://sdk.vercel.ai) and supports all major AI providers.
 
 Named after the bug planet from Starship Troopers.
 
@@ -58,16 +60,29 @@ The main library that users import. Key files:
 
 ### 2. CLI (`packages/klendathu-cli`)
 
-A single-file bundled executable (via esbuild):
+A single-file bundled executable (via Vite):
 
 - **`cli.ts`**:
   - Reads MCP server URL from command line args
   - Reads investigation prompt from stdin
   - Connects to the MCP server using AI SDK 6 (`experimental_createMCPClient`)
-  - Uses `Experimental_Agent` with Claude Code provider for testing/development
+  - Uses `Experimental_Agent` with configurable provider (defaults to Claude Code)
   - Emits structured JSON to stderr for progress tracking
   - Outputs final investigation result to stdout
   - Note: Claude Code provider uses built-in tools (Read, Grep, Bash) which bypass MCP tool tracking
+
+- **`config.ts`**: Configuration loader
+  - Reads from `.klendathu.json` (global: `~/.klendathu.json`, local: `./.klendathu.json`)
+  - Environment variable overrides: `KLENDATHU_PROVIDER`, `KLENDATHU_MODEL`
+  - Schema: `{ provider: string, model?: string, options?: Record<string, unknown> }`
+  - Priority: env vars > local config > global config > defaults
+  - Default provider: `claude-code`
+
+- **`providers.ts`**: Provider factory
+  - Maps config to AI SDK 6 provider instances using `createAnthropic()`, `createOpenAI()`, etc.
+  - Supported providers: anthropic, openai, azure, google, google-vertex, mistral, groq, amazon-bedrock, cohere, xai, claude-code
+  - Each provider uses factory functions that accept options (apiKey, baseURL, headers, etc.)
+  - API keys loaded from environment: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.
 
 ### 3. E2E Tests (`packages/e2e-test`)
 
@@ -75,8 +90,9 @@ A single-file bundled executable (via esbuild):
   - Creates a real error (accessing undefined property)
   - Calls `investigate()` with error context
   - Spawns the actual server and CLI
-  - Verifies Claude produces a useful investigation
-  - Requires `ANTHROPIC_API_KEY` environment variable
+  - Verifies the AI produces a useful investigation
+  - Uses Claude Code provider by default (requires `claude login`)
+  - Can test other providers via `test:openai`, `test:anthropic`, etc.
 
 ## Key Design Patterns
 
@@ -104,15 +120,17 @@ All stderr output is JSON with a `type` discriminator:
 
 The launcher parses these and makes them available via the `stderr` async iterator.
 
-**Note on tool tracking:** The Claude Code provider uses its own built-in tools (Read, Grep, Bash, etc.) which don't appear as MCP tool calls in `result.steps`. Only calls to the MCP `eval` tool are tracked. For production use with accurate tool tracking, use `@ai-sdk/anthropic` provider instead of `ai-sdk-provider-claude-code`.
+**Note on tool tracking:** The Claude Code provider uses its own built-in tools (Read, Grep, Bash, etc.) which don't appear as MCP tool calls in `result.steps`. Only calls to the MCP `eval` tool are tracked. Other providers (anthropic, openai, etc.) will show accurate MCP tool call tracking.
 
 ### Dynamic Prompt Generation
 
 The launcher generates a prompt that includes:
 - Error stack trace (if available)
 - List of available context variables with descriptions
-- Instructions for using the eval tool
+- Instructions for using the MCP eval tool
 - User's `extraInstructions` if provided
+
+This prompt is sent to the AI agent via the CLI.
 
 ### CLI Path Resolution
 
@@ -126,18 +144,59 @@ This is resolved relative to the launcher's import.meta.url.
 - **klendathu**: TypeScript compiled with `tsc` (preserves .js extensions in imports)
 - **klendathu-cli**: Uses Vite for bundling with TypeScript type-checking before build
   - Type-checking runs via `pnpm typecheck` (tsc --noEmit)
-  - Vite bundles src/cli.ts into dist/cli.js with shebang
-  - External dependencies: `ai`, `@ai-sdk/mcp`, `ai-sdk-provider-claude-code`, `@modelcontextprotocol/sdk`
+  - Vite bundles src/cli.ts into dist/cli.js with shebang using SSR mode
+  - All Node.js built-in modules are externalized (via `builtinModules`)
+  - All AI SDK providers are installed as dependencies but externalized at build time
+  - Bundled external dependencies: `ai`, `@ai-sdk/mcp`, `@ai-sdk/anthropic`, `@ai-sdk/openai`, etc.
   - chmod +x is applied via build script
 - **Root pnpm test**: Runs `pnpm build` before tests to ensure everything is up-to-date
+
+## Configuration
+
+Users can configure which AI provider and model to use:
+
+**Config file** (`.klendathu.json`):
+```json
+{
+  "provider": "anthropic",
+  "model": "MODEL_NAME_HERE",
+  "options": {
+    "apiKey": "optional-if-env-var-set"
+  }
+}
+```
+
+**Environment variables** (override config file):
+```bash
+export KLENDATHU_PROVIDER=anthropic
+export KLENDATHU_MODEL=MODEL_NAME_HERE
+export ANTHROPIC_API_KEY=sk-...
+```
+
+**Supported providers** (all require explicit model specification except claude-code):
+- `anthropic` (env: `ANTHROPIC_API_KEY`)
+- `openai` (env: `OPENAI_API_KEY`)
+- `azure` (env: `AZURE_API_KEY`)
+- `google` (env: `GOOGLE_GENERATIVE_AI_API_KEY`)
+- `google-vertex` (env: Google Cloud credentials)
+- `mistral` (env: `MISTRAL_API_KEY`)
+- `groq` (env: `GROQ_API_KEY`)
+- `amazon-bedrock` (env: AWS credentials)
+- `cohere` (env: `COHERE_API_KEY`)
+- `xai` (env: `XAI_API_KEY`)
+- `claude-code` (auth: `claude login`, models: sonnet [default], opus)
+
+**Note:** Model names must be explicitly specified (except for claude-code which defaults to 'sonnet'). Refer to each provider's documentation for available models.
 
 ## Testing Philosophy
 
 - Unit tests in `packages/klendathu` for launcher and server logic
-- E2E test uses Claude Code provider with real Claude API (costs money, slow ~30-50s)
-- E2E test requires authentication: run `claude login` first if using Claude Pro/Max subscription
+- E2E tests can use any AI provider via `test:openai`, `test:anthropic`, `test:google`, `test:bedrock`
+- Default `pnpm test` uses Claude Code provider (requires `claude login`)
+- Other providers require API keys and explicit model names in environment variables
 - Tests use explicit assertions, not vague ones (see user's CLAUDE.md rules)
-- Summary metrics verified: turns, tokens (input/output/total), finishReason, warnings
+- Summary metrics verified: turns, tokens (input/output/total), finishReason, toolCallsCount, warnings
+- Tests cost money and are slow (~20-40s) as they use real AI APIs
 
 ## Future: Multi-Language Support
 

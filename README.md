@@ -1,10 +1,12 @@
 # klendathu
 
-Debug runtime errors with Claude's help.
+Debug runtime errors with AI assistance.
 
 ## Overview
 
-When an exception occurs in your Node.js application, `klendathu` spawns an interactive Claude session with access to your error context. Claude can inspect the error, examine variables, and help you understand what went wrong.
+When an exception occurs in your Node.js application, `klendathu` spawns an interactive AI debugging session with access to your error context. The AI can inspect the error, examine variables, and help you understand what went wrong.
+
+Uses the [Vercel AI SDK](https://sdk.vercel.ai) and supports all major AI providers (Anthropic, OpenAI, Google, etc.).
 
 ## Architecture
 
@@ -20,13 +22,13 @@ Your Application
            │
            └─> Spawns klendathu CLI
                │
-               └─> Claude investigates the error
+               └─> AI investigates the error
 ```
 
 ## Packages
 
 - **klendathu** - Library to integrate into your Node.js apps
-- **klendathu-cli** - CLI that Claude uses to investigate
+- **klendathu-cli** - CLI that connects AI providers to investigate errors
 
 ## Installation
 
@@ -49,7 +51,7 @@ async function processData(data) {
 try {
   await processData(someData);
 } catch (error) {
-  // Investigate with Claude - provide error and local context
+  // Investigate with AI - provide error and local context
   await investigate({
     error,
     data: someData,
@@ -58,14 +60,38 @@ try {
 }
 ```
 
-Claude will have access to an `eval` tool that can execute code with:
+The AI will have access to an `eval` tool that can execute code with:
 - All context variables you passed (error, data, userId in this example)
 - All Node.js globals (console, process, Buffer, etc.)
+
+## Configuration
+
+Configure which AI provider and model to use via environment variables or config file:
+
+```bash
+# Using OpenAI
+export KLENDATHU_PROVIDER=openai
+export KLENDATHU_MODEL=gpt-5
+export OPENAI_API_KEY=sk-...
+
+# Using Anthropic
+export KLENDATHU_PROVIDER=anthropic
+export KLENDATHU_MODEL=claude-3-5-sonnet-20241022
+export ANTHROPIC_API_KEY=sk-...
+
+# Or use a config file: .klendathu.json
+{
+  "provider": "openai",
+  "model": "gpt-5"
+}
+```
+
+See [CLAUDE.md](CLAUDE.md) for all supported providers.
 
 ## Example Debugging Session
 
 ```typescript
-// Claude can use the eval tool like this:
+// The AI can use the eval tool like this:
 {
   "function": "async () => { return context.error.stack; }"
 }
@@ -114,11 +140,11 @@ pnpm build
 pnpm dev
 ```
 
-## Future: Python Support
+## Future: Multi-Language Support
 
 The architecture is designed to support other languages. A Python version would:
 1. Implement the same debug server with an eval tool
 2. Use Python's debugging APIs to capture context
-3. Launch the same claudedebug CLI
+3. Launch the same klendathu CLI
 
 This allows the debugging experience to be consistent across languages.
