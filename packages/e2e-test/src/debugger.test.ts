@@ -11,9 +11,14 @@
 
 import { describe, it, expect } from 'vitest';
 import { investigate } from 'klendathu';
+import { writeFile, mkdir } from 'fs/promises';
+import { join } from 'path';
 
 describe('klendathu end-to-end', () => {
   it('should launch debugger and investigate error', async () => {
+    const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '');
+    const outputDir = `/tmp/klendathu-test-${timestamp}`;
+    await mkdir(outputDir, { recursive: true });
     // Simulate a real application error scenario
     const userId = 'user-123';
     const requestData = { username: 'john', email: 'john@example.com' };
@@ -41,6 +46,12 @@ describe('klendathu end-to-end', () => {
       userId,
       requestData,
     });
+
+    // Collect stderr messages
+    const stderrMessages: any[] = [];
+    for await (const message of promise.stderr) {
+      stderrMessages.push(message);
+    }
 
     // Claude should investigate and produce analysis
     const analysis = await promise;
@@ -75,5 +86,36 @@ describe('klendathu end-to-end', () => {
     expect(summary.inputTokens).toBeGreaterThan(0);
     expect(summary.outputTokens).toBeGreaterThan(0);
     expect(summary.finishReason).toBe('stop');
+
+    // Write all debugging info to files
+    await writeFile(
+      join(outputDir, 'analysis.txt'),
+      analysis,
+      'utf-8'
+    );
+
+    await writeFile(
+      join(outputDir, 'summary.json'),
+      JSON.stringify(summary, null, 2),
+      'utf-8'
+    );
+
+    await writeFile(
+      join(outputDir, 'stderr.json'),
+      JSON.stringify(stderrMessages, null, 2),
+      'utf-8'
+    );
+
+    await writeFile(
+      join(outputDir, 'error.json'),
+      JSON.stringify({
+        message: caughtError?.message,
+        stack: caughtError?.stack,
+        context: { userId, requestData }
+      }, null, 2),
+      'utf-8'
+    );
+
+    console.log(`\n=== Debug files written to: ${outputDir} ===`);
   });
 });

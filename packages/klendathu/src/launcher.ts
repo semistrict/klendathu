@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { resolve } from 'node:path';
+import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DebugContext, LaunchOptions, DebuggerPromise, StderrMessage, Summary } from './types.js';
 import { StderrMessageSchema } from './types.js';
@@ -43,6 +43,31 @@ export function investigate(
   },
   options: InvestigateOptions = {}
 ): DebuggerPromise {
+  // Capture caller's file path from stack trace
+  const callerStack = new Error().stack || '';
+  let callerDir: string | undefined;
+
+  const stackLines = callerStack.split('\n');
+  // Skip first 2 lines (Error message and investigate() itself)
+  for (let i = 2; i < stackLines.length; i++) {
+    const line = stackLines[i];
+    const match = line.match(/\(([^:)]+):\d+:\d+\)/) || line.match(/at ([^:]+):\d+:\d+/);
+    if (match) {
+      const filePath = match[1];
+      if (!filePath.includes('node_modules') && !filePath.startsWith('node:')) {
+        try {
+          const actualPath = filePath.startsWith('file://')
+            ? fileURLToPath(filePath)
+            : filePath;
+          callerDir = dirname(actualPath);
+          break;
+        } catch {
+          // Continue to next line
+        }
+      }
+    }
+  }
+
   // Build context from input
   const contextEntries = context || {};
   const contextVars: Record<string, unknown> = {};
@@ -92,12 +117,12 @@ export function investigate(
 
     // Add stack trace if error exists
     if (contextVars.error && contextVars.error instanceof Error && contextVars.error.stack) {
-      prompt += `${contextVars.error.stack}\n\n`;
+      prompt += `<error_stack>\n${contextVars.error.stack}\n</error_stack>\n\n`;
     } else {
-      prompt += `PID ${pid} at ${timestamp}\n\n`;
+      prompt += `<execution_point>PID ${pid} at ${timestamp}</execution_point>\n\n`;
     }
 
-    prompt += `Available context variables:\n`;
+    prompt += `<available_context>\n`;
     for (const [key, value] of Object.entries(contextVars)) {
       const desc = contextDescriptions[key];
       if (desc) {
@@ -106,8 +131,10 @@ export function investigate(
         prompt += `- ${key}: ${typeof value}\n`;
       }
     }
+    prompt += `</available_context>\n`;
 
-    prompt += `\nYou have access to an "eval" MCP tool that can execute JavaScript functions with access to the error context.\n\n`;
+    prompt += `\n<instructions>\n`;
+    prompt += `You have access to an "eval" MCP tool that can execute JavaScript functions with access to the error context.\n\n`;
     prompt += `The eval tool accepts a "function" parameter containing a JavaScript function expression like: "async () => { return someVariable; }"\n\n`;
     prompt += `Available in the eval context:\n`;
     prompt += `- context: Object containing all captured context variables\n`;
@@ -118,23 +145,29 @@ export function investigate(
     prompt += `After your investigation, provide:\n`;
     prompt += `- A clear description of what happened\n`;
     prompt += `- The root cause based on the context\n`;
-    prompt += `- Specific suggestions for how to fix it\n\n`;
+    prompt += `- Specific suggestions for how to fix it\n`;
+    prompt += `</instructions>\n\n`;
     prompt += `Begin your investigation now.`;
 
     if (options.extraInstructions) {
-      prompt += `\n\nAdditional instructions:\n${options.extraInstructions}`;
+      prompt += `\n\n<additional_instructions>\n${options.extraInstructions}\n</additional_instructions>`;
     }
 
-    emitStderr({ type: 'log', message: `Launching debugger: node ${cliPath} ${mcpServer.url}` });
+    emitStderr({ type: 'log', message: `Launching debugger: node ${cliPath}` });
 
-    // Spawn the CLI with Node.js
-    const child = spawn('node', [cliPath, mcpServer.url], {
+    // Spawn the CLI with Node.js (no args, all data via stdin)
+    const child = spawn('node', [cliPath], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: process.env,
     });
 
-    // Send prompt to stdin
-    child.stdin?.write(prompt);
+    // Send all data as JSON to stdin
+    const stdinData = JSON.stringify({
+      mcpUrl: mcpServer.url,
+      prompt,
+      callerDir,
+    });
+    child.stdin?.write(stdinData);
     child.stdin?.end();
 
     let stdout = '';

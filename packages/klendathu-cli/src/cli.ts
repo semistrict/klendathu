@@ -9,40 +9,78 @@
 
 import { Experimental_Agent as Agent } from 'ai';
 import { experimental_createMCPClient as createMCPClient } from '@ai-sdk/mcp';
-import { parseArgs } from 'node:util';
+import { z } from 'zod';
 import { loadConfig } from './config.js';
 import { createModel } from './providers.js';
+import { loadProjectContext } from './context-loader.js';
+
+const StdinInputSchema = z.object({
+  mcpUrl: z.string().url(),
+  prompt: z.string(),
+  callerDir: z.string().optional(),
+});
+
+type StdinInput = z.infer<typeof StdinInputSchema>;
 
 function emitStderr(message: any) {
   console.error(JSON.stringify({ ...message, timestamp: new Date().toISOString() }));
 }
 
 async function main() {
-  const { positionals } = parseArgs({
-    allowPositionals: true,
-    strict: true,
-  });
+  // Read JSON input from stdin
+  let stdinData = '';
+  for await (const chunk of process.stdin) {
+    stdinData += chunk;
+  }
 
-  if (positionals.length === 0) {
-    emitStderr({ type: 'log', message: 'Usage: klendathu <mcp-server-url>' });
-    emitStderr({ type: 'log', message: 'Example: klendathu http://localhost:2839/mcp' });
+  if (!stdinData.trim()) {
+    emitStderr({ type: 'log', message: 'Error: No input provided on stdin' });
     process.exit(1);
   }
 
-  const mcpUrl = positionals[0];
+  // Parse and validate stdin input
+  let input: StdinInput;
+  try {
+    const parsed = JSON.parse(stdinData);
+    input = StdinInputSchema.parse(parsed);
+  } catch (error) {
+    emitStderr({ type: 'log', message: `Error: Invalid stdin input: ${error}` });
+    process.exit(1);
+  }
+
+  const { mcpUrl, prompt: userPrompt, callerDir } = input;
 
   emitStderr({ type: 'log', message: `Connecting to MCP server at ${mcpUrl}...` });
 
-  // Read prompt from stdin
-  let prompt = '';
-  for await (const chunk of process.stdin) {
-    prompt += chunk;
+  // Load project context from AGENTS.md/CLAUDE.md if caller directory provided
+  let projectContext = '';
+  if (callerDir) {
+    try {
+      const context = await loadProjectContext(callerDir);
+      if (context.filesFound.length > 0) {
+        emitStderr({
+          type: 'log',
+          message: `Loaded project context from: ${context.filesFound.join(', ')}`
+        });
+        projectContext = context.content;
+      }
+    } catch (error) {
+      emitStderr({
+        type: 'log',
+        message: `Warning: Could not load project context: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
   }
 
-  if (!prompt.trim()) {
-    emitStderr({ type: 'log', message: 'Error: No prompt provided on stdin' });
-    process.exit(1);
+  // Build final prompt with project context
+  let prompt = '';
+  if (projectContext) {
+    prompt += `<project_context>\n`;
+    prompt += `The following context was loaded from AGENTS.md/CLAUDE.md files in the project:\n\n`;
+    prompt += projectContext;
+    prompt += `\n</project_context>\n\n`;
   }
+  prompt += userPrompt;
 
   // Create MCP client with HTTP transport
   const mcpClient = await createMCPClient({
