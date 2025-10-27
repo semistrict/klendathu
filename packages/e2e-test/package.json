@@ -1,0 +1,19 @@
+{
+  "name": "@klendathu/e2e-test",
+  "version": "0.1.0",
+  "description": "End-to-end tests for klendathu",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "klendathu": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.12",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
+  }
+}

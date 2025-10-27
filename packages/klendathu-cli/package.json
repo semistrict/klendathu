@@ -1,0 +1,23 @@
+{
+  "name": "klendathu-cli",
+  "version": "0.1.0",
+  "description": "CLI debugger powered by Claude and MCP",
+  "type": "module",
+  "bin": {
+    "klendathu": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --outfile=dist/cli.js --banner:js=\"#!/usr/bin/env node\" --external:@anthropic-ai/claude-agent-sdk && chmod +x dist/cli.js",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.1.27",
+    "@modelcontextprotocol/sdk": "^1.20.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.12",
+    "esbuild": "^0.25.11",
+    "typescript": "^5.9.3"
+  }
+}
