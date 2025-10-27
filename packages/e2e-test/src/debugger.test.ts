@@ -55,10 +55,25 @@ describe('klendathu end-to-end', () => {
     // Check summary
     const summary = await promise.summary;
     console.log('=== Summary ===');
-    console.log(`Cost: $${summary.cost}`);
     console.log(`Turns: ${summary.turns}`);
+    console.log(`Finish Reason: ${summary.finishReason}`);
+    console.log(`Input Tokens: ${summary.inputTokens}`);
+    console.log(`Output Tokens: ${summary.outputTokens}`);
+    console.log(`Total Tokens: ${summary.totalTokens}`);
+    console.log(`Tool Calls: ${summary.toolCallsCount}`);
+    if (summary.reasoningTokens) {
+      console.log(`Reasoning Tokens: ${summary.reasoningTokens}`);
+    }
+    if (summary.cachedInputTokens) {
+      console.log(`Cached Input Tokens: ${summary.cachedInputTokens}`);
+    }
+    if (summary.warnings) {
+      console.log(`Warnings: ${summary.warnings.join(', ')}`);
+    }
 
-    expect(summary.cost).toBeGreaterThan(0);
     expect(summary.turns).toBeGreaterThan(0);
+    expect(summary.inputTokens).toBeGreaterThan(0);
+    expect(summary.outputTokens).toBeGreaterThan(0);
+    expect(summary.finishReason).toBe('stop');
   });
 });

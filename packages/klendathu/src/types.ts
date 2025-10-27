@@ -68,8 +68,15 @@ export const StderrMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('summary'),
-    cost: z.number(),
     turns: z.number(),
+    finishReason: z.string(),
+    inputTokens: z.number(),
+    outputTokens: z.number(),
+    totalTokens: z.number(),
+    reasoningTokens: z.number().optional(),
+    cachedInputTokens: z.number().optional(),
+    toolCallsCount: z.number(),
+    warnings: z.array(z.string()).optional(),
     timestamp: z.string(),
   }),
 ]);

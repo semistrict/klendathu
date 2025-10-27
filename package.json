@@ -7,7 +7,7 @@
     "build": "pnpm -r build",
     "dev": "pnpm -r --parallel dev",
     "clean": "pnpm -r clean",
-    "test": "pnpm -r test"
+    "test": "pnpm build && pnpm -r test"
   },
   "devDependencies": {
     "typescript": "^5.7.2"

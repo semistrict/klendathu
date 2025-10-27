@@ -7,7 +7,9 @@
  *   klendathu http://localhost:2839/mcp
  */
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { Experimental_Agent as Agent } from 'ai';
+import { experimental_createMCPClient as createMCPClient } from '@ai-sdk/mcp';
+import { claudeCode } from 'ai-sdk-provider-claude-code';
 import { parseArgs } from 'node:util';
 
 function emitStderr(message: any) {
@@ -28,9 +30,6 @@ async function main() {
 
   const mcpUrl = positionals[0];
 
-  // Parse URL to extract host and port
-  const url = new URL(mcpUrl);
-
   emitStderr({ type: 'log', message: `Connecting to MCP server at ${mcpUrl}...` });
 
   // Read prompt from stdin
@@ -44,90 +43,105 @@ async function main() {
     process.exit(1);
   }
 
+  // Create MCP client with HTTP transport
+  const mcpClient = await createMCPClient({
+    transport: {
+      type: 'http',
+      url: mcpUrl,
+    },
+  });
+
   try {
-    const result = query({
+    // Get tools from the MCP server
+    const mcpTools = await mcpClient.tools();
+
+    // Create agent with Claude Code provider and MCP tools
+    const agent = new Agent({
+      model: claudeCode('sonnet'),
+      tools: mcpTools,
+      // No stop condition - let it run until completion
+    });
+
+    // Execute the agent
+    const result = await agent.generate({
       prompt,
-      options: {
-        systemPrompt: {
-          type: 'preset',
-          preset: 'claude_code',
-        },
-        permissionMode: 'bypassPermissions', // Auto-accept all operations
-        mcpServers: {
-          debugger: {
-            type: 'http',
-            url: mcpUrl,
-          },
-        },
-        // All Claude Code tools are available: Read, Write, Edit, Bash, Grep, Glob, etc.
-        // No tool restrictions - agent has full access to investigate
-      },
     });
 
     let turnNumber = 0;
-    const toolCalls = new Map<string, string>();
 
-    for await (const message of result) {
-      if (message.type === 'assistant') {
-        turnNumber++;
-        emitStderr({
-          type: 'turn',
-          turnNumber,
-          stopReason: message.message.stop_reason || undefined,
-        });
+    // Process steps and emit structured stderr
+    // Each step is a complete generation round that may include tool calls and results
+    emitStderr({ type: 'log', message: `Result has ${result.steps.length} steps` });
+    for (const step of result.steps) {
+      turnNumber++;
+      emitStderr({
+        type: 'turn',
+        turnNumber,
+        stopReason: step.finishReason,
+      });
 
-        // Print assistant text messages to stdout
-        for (const block of message.message.content) {
-          if (block.type === 'text') {
-            console.log(block.text);
-          } else if (block.type === 'tool_use') {
-            toolCalls.set(block.id, block.name);
-            emitStderr({
-              type: 'tool_call',
-              toolName: block.name,
-              input: block.input,
-            });
-          }
-        }
-      } else if (message.type === 'user') {
-        // User messages contain tool results
-        for (const block of message.message.content) {
-          if (block.type === 'tool_result') {
-            const toolName = toolCalls.get(block.tool_use_id) || 'unknown';
-            let resultPreview = '';
-            for (const content of block.content) {
-              if (typeof content === 'object' && content.type === 'text') {
-                resultPreview = content.text.slice(0, 200);
-                break;
-              }
-            }
-            emitStderr({
-              type: 'tool_result',
-              toolName,
-              resultPreview,
-            });
-          }
-        }
-      } else if (message.type === 'result') {
-        if (message.subtype === 'success') {
-          console.log('\n--- Final Result ---');
-          console.log(message.result);
-
-          // Emit summary as the last stderr message
+      // Emit tool calls
+      if (step.toolCalls && step.toolCalls.length > 0) {
+        for (const toolCall of step.toolCalls) {
           emitStderr({
-            type: 'summary',
-            cost: message.total_cost_usd,
-            turns: message.num_turns,
+            type: 'tool_call',
+            toolName: toolCall.toolName,
+            input: toolCall.input,
           });
-        } else {
-          emitStderr({ type: 'log', message: `Error: ${message.subtype}` });
-          process.exit(1);
+        }
+      }
+
+      // Emit tool results
+      if (step.toolResults && step.toolResults.length > 0) {
+        for (const toolResult of step.toolResults) {
+          emitStderr({
+            type: 'tool_result',
+            toolName: toolResult.toolName,
+            resultPreview: JSON.stringify(toolResult.output).slice(0, 200),
+          });
         }
       }
     }
+
+    // Output the final text
+    console.log('\n--- Final Result ---');
+    console.log(result.text);
+
+    // Count total tool calls across all steps
+    const toolCallsCount = result.steps.reduce((count, step) => {
+      return count + (step.toolCalls?.length ?? 0);
+    }, 0);
+
+    // Collect warnings if any
+    const warnings = result.warnings?.map(w => {
+      if (w.type === 'unsupported-setting') {
+        return `Unsupported setting: ${w.setting}${w.details ? ` - ${w.details}` : ''}`;
+      } else if (w.type === 'unsupported-tool') {
+        return `Unsupported tool${w.details ? `: ${w.details}` : ''}`;
+      } else {
+        return w.message;
+      }
+    });
+
+    // Emit summary as the last stderr message
+    emitStderr({
+      type: 'summary',
+      turns: turnNumber,
+      finishReason: result.finishReason,
+      inputTokens: result.totalUsage.inputTokens ?? 0,
+      outputTokens: result.totalUsage.outputTokens ?? 0,
+      totalTokens: result.totalUsage.totalTokens ?? 0,
+      reasoningTokens: result.totalUsage.reasoningTokens,
+      cachedInputTokens: result.totalUsage.cachedInputTokens,
+      toolCallsCount,
+      warnings,
+    });
+
   } catch (error) {
-    emitStderr({ type: 'log', message: `Failed to connect: ${error}` });
+    emitStderr({ type: 'log', message: `Failed to execute agent: ${error}` });
     process.exit(1);
+  } finally {
+    await mcpClient.close();
   }
 }
 

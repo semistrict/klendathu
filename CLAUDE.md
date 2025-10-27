@@ -63,10 +63,11 @@ A single-file bundled executable (via esbuild):
 - **`cli.ts`**:
   - Reads MCP server URL from command line args
   - Reads investigation prompt from stdin
-  - Connects to the MCP server using `@anthropic-ai/claude-agent-sdk`
-  - Uses Claude to investigate the error
+  - Connects to the MCP server using AI SDK 6 (`experimental_createMCPClient`)
+  - Uses `Experimental_Agent` with Claude Code provider for testing/development
   - Emits structured JSON to stderr for progress tracking
   - Outputs final investigation result to stdout
+  - Note: Claude Code provider uses built-in tools (Read, Grep, Bash) which bypass MCP tool tracking
 
 ### 3. E2E Tests (`packages/e2e-test`)
 
@@ -97,11 +98,13 @@ All stderr output is JSON with a `type` discriminator:
 - `server_started`: MCP server URL
 - `log`: General messages
 - `turn`: Claude turn completed
-- `tool_call`: Claude called a tool
-- `tool_result`: Tool execution result
-- `summary`: Final statistics (cost, turns)
+- `tool_call`: Claude called an MCP tool
+- `tool_result`: MCP tool execution result
+- `summary`: Final statistics (turns, tokens, finishReason, toolCallsCount, warnings)
 
 The launcher parses these and makes them available via the `stderr` async iterator.
+
+**Note on tool tracking:** The Claude Code provider uses its own built-in tools (Read, Grep, Bash, etc.) which don't appear as MCP tool calls in `result.steps`. Only calls to the MCP `eval` tool are tracked. For production use with accurate tool tracking, use `@ai-sdk/anthropic` provider instead of `ai-sdk-provider-claude-code`.
 
 ### Dynamic Prompt Generation
 
@@ -121,15 +124,20 @@ This is resolved relative to the launcher's import.meta.url.
 ## Build Process
 
 - **klendathu**: TypeScript compiled with `tsc` (preserves .js extensions in imports)
-- **klendathu-cli**: Bundled with esbuild into a single file with shebang, external `@anthropic-ai/claude-agent-sdk`
-  - The shebang is added via `--banner:js` flag (not in source)
+- **klendathu-cli**: Uses Vite for bundling with TypeScript type-checking before build
+  - Type-checking runs via `pnpm typecheck` (tsc --noEmit)
+  - Vite bundles src/cli.ts into dist/cli.js with shebang
+  - External dependencies: `ai`, `@ai-sdk/mcp`, `ai-sdk-provider-claude-code`, `@modelcontextprotocol/sdk`
   - chmod +x is applied via build script
+- **Root pnpm test**: Runs `pnpm build` before tests to ensure everything is up-to-date
 
 ## Testing Philosophy
 
 - Unit tests in `packages/klendathu` for launcher and server logic
-- E2E test actually calls the real Claude API (costs money, slow)
+- E2E test uses Claude Code provider with real Claude API (costs money, slow ~30-50s)
+- E2E test requires authentication: run `claude login` first if using Claude Pro/Max subscription
 - Tests use explicit assertions, not vague ones (see user's CLAUDE.md rules)
+- Summary metrics verified: turns, tokens (input/output/total), finishReason, warnings
 
 ## Future: Multi-Language Support
 
