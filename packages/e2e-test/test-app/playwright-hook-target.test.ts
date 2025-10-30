@@ -1,9 +1,14 @@
-import { test, expect } from '@playwright/test';
+import { test as base, expect } from '@playwright/test';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// Create extended test with custom fixtures
+const test = base.extend({
+  // Custom fixture example (empty for now, just testing extend)
+});
 
 test.describe('Test App', () => {
   test.beforeEach(async ({ page }) => {
