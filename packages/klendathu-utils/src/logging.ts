@@ -82,7 +82,10 @@ export function TRACE(strings: TemplateStringsArray, ...values: any[]): void {
     if (i < values.length) {
       const value = values[i];
       // Format the value
-      if (typeof value === 'object' && value !== null) {
+      if (value instanceof Error) {
+        // Serialize Error objects with message and stack
+        message += `${value.message}\n${value.stack || ''}`;
+      } else if (typeof value === 'object' && value !== null) {
         try {
           message += JSON.stringify(value);
         } catch {

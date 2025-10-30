@@ -11,6 +11,9 @@ describe('playwright-hook', () => {
     const testAppDir = join(__dirname, '..', 'test-app');
     const klendathuCli = join(__dirname, '..', '..', 'klendathu-cli', 'dist', 'cli.js');
 
+    // Generate random number to verify investigation has page access
+    const randomNum = Math.floor(Math.random() * 1000000);
+
     const result = await new Promise<{
       stdout: string;
       stderr: string;
@@ -18,10 +21,13 @@ describe('playwright-hook', () => {
     }>((resolve) => {
       const proc = spawn(
         klendathuCli,
-        ['npx', 'playwright', 'test', 'playwright-hook-target.test.ts'],
+        ['npx', 'playwright', 'test', 'playwright-hook-target.test.ts', '--grep', 'should find random number'],
         {
           cwd: testAppDir,
-          env: process.env,
+          env: {
+            ...process.env,
+            TEST_RANDOM_NUMBER: randomNum.toString(),
+          },
         }
       );
 
@@ -50,5 +56,8 @@ describe('playwright-hook', () => {
     expect(result.stderr).toContain('🐛 Playwright step');
     expect(result.stderr).toContain('investigating');
     expect(result.stderr).toContain('📋 Klendathu Investigation');
-  }, 400000); // Longer timeout for 4 tests × ~60s each
+
+    // CRITICAL: Verify investigation found the actual random number, proving it has page access
+    expect(result.stderr).toContain(`Random: ${randomNum}`);
+  }, 120000);
 });

@@ -13,19 +13,10 @@ const Module = require('module');
 TRACE`Playwright hook loaded`;
 
 const KLENDATHU_PATCHED = Symbol('klendathu.patched');
-const KLENDATHU_FIXTURES = Symbol('klendathu.fixtures');
-
-interface KlendathuExt {
-  page?: any;
-  context?: any;
-  browser?: any;
-  request?: any;
-}
 
 declare global {
   interface Function {
     [KLENDATHU_PATCHED]?: boolean;
-    [KLENDATHU_FIXTURES]?: KlendathuExt;
   }
 }
 
@@ -79,8 +70,53 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
 
       return originalTest.call(this, title, async function (this: any, { page, context, browser, request }: any, testInfo: any) {
         TRACE`Starting test execution: ${title}`;
-        // Store fixtures in wrapped test for access in step handler
-        wrappedTest[KLENDATHU_FIXTURES] = { page, context, browser, request };
+
+        // Patch wrappedTest.step to have access to fixtures via closure
+        const originalStepOnWrappedTest = (wrappedTest as any).step;
+        if (originalStepOnWrappedTest) {
+          const originalStepBound = originalStepOnWrappedTest.bind(wrappedTest);
+          (wrappedTest as any).step = async function<T>(
+            stepTitle: string,
+            body: () => Promise<T>,
+            options?: { box?: boolean }
+          ): Promise<T> {
+            TRACE`Starting test.step: ${stepTitle}`;
+            try {
+              const result = await originalStepBound(stepTitle, body, options);
+              TRACE`Test.step passed: ${stepTitle}`;
+              return result;
+            } catch (error) {
+              TRACE`Test.step failed: ${stepTitle}, error: ${error}`;
+              console.error(`\n🐛 Playwright step "${stepTitle}" failed, investigating...\n`);
+
+              if (typeof testInfo.setTimeout === 'function') {
+                testInfo.setTimeout(300000);
+                TRACE`Set timeout to 300000ms for step: ${stepTitle}`;
+              }
+
+              try {
+                TRACE`Starting investigation for step: ${stepTitle}`;
+                const investigation = await performInvestigation(
+                  error instanceof Error ? error : new Error(String(error)),
+                  stepTitle,
+                  'stepTitle',
+                  { page, context, browser, request }
+                );
+
+                TRACE`Investigation completed for step: ${stepTitle}`;
+                console.error('\n📋 Klendathu Investigation:\n');
+                console.error(investigation);
+              } catch (err) {
+                TRACE`Investigation failed for step: ${stepTitle}, error: ${err}`;
+                console.error('\n⚠️  Investigation failed:', err);
+              }
+
+              TRACE`Re-throwing original error for step: ${stepTitle}`;
+              throw error;
+            }
+          };
+        }
+
         try {
           // Call original test function with fixtures
           const result = await testFn.call(this, { page, context, browser, request }, testInfo);
@@ -127,58 +163,6 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
         // Recursively wrap the extended test
         return wrapTestObject(extendedTest, moduleName);
       };
-    }
-
-    // Also patch test.step if it exists
-    if (typeof wrappedTest.step === 'function') {
-      const originalStep = wrappedTest.step.bind(wrappedTest);
-
-      wrappedTest.step = async function interceptedStep<T>(
-        title: string,
-        body: () => Promise<T>,
-        options?: { box?: boolean }
-      ): Promise<T> {
-        TRACE`Starting test.step: ${title}`;
-        try {
-          const result = await originalStep(title, body, options);
-          TRACE`Test.step passed: ${title}`;
-          return result;
-        } catch (error) {
-          TRACE`Test.step failed: ${title}, error: ${error}`;
-          console.error(`\n🐛 Playwright step "${title}" failed, investigating...\n`);
-
-          if (typeof (wrappedTest as any).setTimeout === 'function') {
-            (wrappedTest as any).setTimeout(300000);
-            TRACE`Set timeout to 300000ms for step: ${title}`;
-          }
-
-          try {
-            TRACE`Starting investigation for step: ${title}`;
-            const fixtures = wrappedTest[KLENDATHU_FIXTURES];
-            if (!fixtures) {
-              throw new Error('Test fixtures not available in step handler');
-            }
-            const investigation = await performInvestigation(
-              error instanceof Error ? error : new Error(String(error)),
-              title,
-              'stepTitle',
-              fixtures
-            );
-
-            TRACE`Investigation completed for step: ${title}`;
-            console.error('\n📋 Klendathu Investigation:\n');
-            console.error(investigation);
-          } catch (err) {
-            TRACE`Investigation failed for step: ${title}, error: ${err}`;
-            console.error('\n⚠️  Investigation failed:', err);
-          }
-
-          TRACE`Re-throwing original error for step: ${title}`;
-          throw error;
-        }
-      };
-
-      wrappedTest.step[KLENDATHU_PATCHED] = true;
     }
 
   return wrappedTest;

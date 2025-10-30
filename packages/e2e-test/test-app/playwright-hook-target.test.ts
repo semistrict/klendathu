@@ -70,4 +70,26 @@ test.describe('Test App', () => {
       expect(status).toBe('Registered: testuser (test@example.com)');
     });
   });
+
+  test('should find random number in page (verifies page access in step investigation)', async ({ page }) => {
+    if (!process.env.TEST_RANDOM_NUMBER) {
+      throw new Error('TEST_RANDOM_NUMBER environment variable must be set');
+    }
+    const randomNum = parseInt(process.env.TEST_RANDOM_NUMBER, 10);
+
+    await test.step('inject random number into page', async () => {
+      await page.evaluate((num) => {
+        const div = document.createElement('div');
+        div.id = 'random-value';
+        div.textContent = `Random: ${num}`;
+        document.body.appendChild(div);
+      }, randomNum);
+    });
+
+    await test.step('verify random number matches', async () => {
+      const text = await page.textContent('#random-value');
+      // This will fail with wrong number, forcing investigation to use page object
+      expect(text).toBe(`Random: ${randomNum + 1}`);
+    });
+  });
 });
