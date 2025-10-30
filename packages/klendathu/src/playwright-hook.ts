@@ -64,7 +64,9 @@ declare global {
 }
 
 /**
- * Wrap a test object to intercept test calls
+ * Wrap a test object to intercept test calls using a Proxy.
+ * This is more robust than creating a new function because it intercepts
+ * ALL calls to the test, even from internal Playwright references.
  */
 function wrapTestObject(originalTest: any, moduleName: string): any {
   if (originalTest[KLENDATHU_PATCHED]) {
@@ -73,19 +75,23 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
 
   TRACE`wrapTestObject called for module: ${moduleName}`;
 
-  // Store the original test function implementation
-  const originalTestImpl = originalTest;
+  let patchedStep: any = null;
+  let patchedExtend: any = null;
 
-  // Create wrapped test function
-  const wrappedTest = function (this: any, title: string, testFn: any) {
-      TRACE`Instrumented Playwright test: "${title}" (wrappedTest called)`;
+  const wrappedTest = new Proxy(originalTest, {
+    // Intercept function calls to the test
+    apply(target, thisArg, args) {
+      const [title, testFn] = args;
+      TRACE`Instrumented Playwright test: "${title}" (Proxy apply)`;
+
       // Extend timeout before test runs
-      if (typeof originalTest.setTimeout === 'function') {
-        originalTest.setTimeout(300000);
+      if (typeof target.setTimeout === 'function') {
+        target.setTimeout(300000);
         TRACE`Set timeout to 300000ms for test: ${title}`;
       }
 
-      return originalTest.call(this, title, async function (this: any, { page, context, browser, request }: any, testInfo: any) {
+      // Call the original test with our wrapped test function
+      return target.call(thisArg, title, async function (this: any, { page, context, browser, request }: any, testInfo: any) {
         TRACE`Starting test execution: ${title}`;
 
         // Store fixtures in ALS for access by step handlers
@@ -126,72 +132,83 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
           }
         });
       });
-    };
+    },
 
-    // Copy all properties from original test
-    Object.setPrototypeOf(wrappedTest, originalTest);
-    Object.assign(wrappedTest, originalTest);
-    wrappedTest[KLENDATHU_PATCHED] = true;
+    // Intercept property access
+    get(target, prop) {
+      // Mark as patched
+      if (prop === KLENDATHU_PATCHED) {
+        return true;
+      }
 
-    // Patch test.step to use ALS for fixtures (MUST be after Object.assign!)
-    if (typeof (wrappedTest as any).step === 'function' && !(wrappedTest as any).step[KLENDATHU_PATCHED]) {
-      const originalStep = (wrappedTest as any).step.bind(wrappedTest);
+      // Lazily patch step
+      if (prop === 'step' && typeof target.step === 'function') {
+        if (!patchedStep) {
+          const originalStep = target.step.bind(wrappedTest);
+          patchedStep = async function<T>(
+            stepTitle: string,
+            body: () => Promise<T>,
+            options?: { box?: boolean }
+          ): Promise<T> {
+            TRACE`Starting test.step: ${stepTitle}`;
+            try {
+              const result = await originalStep(stepTitle, body, options);
+              TRACE`Test.step passed: ${stepTitle}`;
+              return result;
+            } catch (error) {
+              TRACE`Test.step failed: ${stepTitle}, error: ${error}`;
+              console.error(`\n🐛 Playwright step "${stepTitle}" failed, investigating...\n`);
 
-      (wrappedTest as any).step = async function<T>(
-        stepTitle: string,
-        body: () => Promise<T>,
-        options?: { box?: boolean }
-      ): Promise<T> {
-        TRACE`Starting test.step: ${stepTitle}`;
-        try {
-          const result = await originalStep(stepTitle, body, options);
-          TRACE`Test.step passed: ${stepTitle}`;
-          return result;
-        } catch (error) {
-          TRACE`Test.step failed: ${stepTitle}, error: ${error}`;
-          console.error(`\n🐛 Playwright step "${stepTitle}" failed, investigating...\n`);
+              try {
+                TRACE`Starting investigation for step: ${stepTitle}`;
+                const fixtures = fixturesStorage.getStore();
+                TRACE`Retrieved fixtures from ALS: ${fixtures ? 'found' : 'NOT FOUND'}`;
+                if (!fixtures) {
+                  throw new Error('Fixtures not available in AsyncLocalStorage');
+                }
 
-          try {
-            TRACE`Starting investigation for step: ${stepTitle}`;
-            const fixtures = fixturesStorage.getStore();
-            TRACE`Retrieved fixtures from ALS: ${fixtures ? 'found' : 'NOT FOUND'}`;
-            if (!fixtures) {
-              throw new Error('Fixtures not available in AsyncLocalStorage - this likely means test.step was called outside of a test function that was wrapped by klendathu');
+                const investigation = await performInvestigation(
+                  error instanceof Error ? error : new Error(String(error)),
+                  stepTitle,
+                  'stepTitle',
+                  fixtures
+                );
+
+                TRACE`Investigation completed for step: ${stepTitle}`;
+                console.error('\n📋 Klendathu Investigation:\n');
+                console.error(investigation);
+              } catch (err) {
+                TRACE`Investigation failed for step: ${stepTitle}, error: ${err}`;
+                console.error('\n⚠️  Investigation failed:', err);
+              }
+
+              TRACE`Re-throwing original error for step: ${stepTitle}`;
+              throw error;
             }
-
-            const investigation = await performInvestigation(
-              error instanceof Error ? error : new Error(String(error)),
-              stepTitle,
-              'stepTitle',
-              fixtures
-            );
-
-            TRACE`Investigation completed for step: ${stepTitle}`;
-            console.error('\n📋 Klendathu Investigation:\n');
-            console.error(investigation);
-          } catch (err) {
-            TRACE`Investigation failed for step: ${stepTitle}, error: ${err}`;
-            console.error('\n⚠️  Investigation failed:', err);
-          }
-
-          TRACE`Re-throwing original error for step: ${stepTitle}`;
-          throw error;
+          };
+          patchedStep[KLENDATHU_PATCHED] = true;
         }
-      };
+        return patchedStep;
+      }
 
-      (wrappedTest as any).step[KLENDATHU_PATCHED] = true;
-    }
+      // Lazily patch extend
+      if (prop === 'extend' && typeof target.extend === 'function') {
+        if (!patchedExtend) {
+          const originalExtend = target.extend.bind(wrappedTest);
+          patchedExtend = function(fixtures: any) {
+            TRACE`test.extend() called, wrapping extended test object`;
+            const extendedTest = originalExtend(fixtures);
+            // Recursively wrap the extended test
+            return wrapTestObject(extendedTest, moduleName);
+          };
+        }
+        return patchedExtend;
+      }
 
-    // Intercept .extend() to wrap extended test objects (MUST be after Object.assign!)
-    if (typeof originalTest.extend === 'function') {
-      const originalExtend = originalTest.extend.bind(wrappedTest);  // Bind to wrappedTest, not originalTest!
-      wrappedTest.extend = function(fixtures: any) {
-        TRACE`test.extend() called, wrapping extended test object`;
-        const extendedTest = originalExtend(fixtures);
-        // Recursively wrap the extended test
-        return wrapTestObject(extendedTest, moduleName);
-      };
+      // Return original property
+      return target[prop];
     }
+  });
 
   return wrappedTest;
 }
@@ -204,12 +221,14 @@ Module._load = function (request: string, parent: any, isMain: boolean) {
 
   // Check if this module has a test object
   if (module && module.test && !module.test[KLENDATHU_PATCHED]) {
+    TRACE`Module._load intercepted module with test object: ${request}`;
     const wrappedTest = wrapTestObject(module.test, request);
 
     // Wrap module in a Proxy to intercept test access
     module = new Proxy(module, {
       get(target, prop) {
         if (prop === 'test') {
+          TRACE`Module proxy returning wrappedTest for module: ${request}`;
           return wrappedTest;
         }
         return target[prop];
