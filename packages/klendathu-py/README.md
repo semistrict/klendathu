@@ -110,6 +110,28 @@ user = await result
 print(user)  # {'name': 'Alice', 'age': 30, 'email': 'alice@example.com'}
 ```
 
+**Error Handling:**
+
+If the AI cannot fulfill the implementation request, it will call the `fail_implementation` tool with a clear reason. This raises a `RuntimeError` with the AI's explanation:
+
+```python
+try:
+    result = implement(
+        prompt="Create impossible data structure",
+        context={},
+        model=UserProfile
+    )
+    user = await result
+except RuntimeError as e:
+    print(f"Implementation failed: {e}")
+    # Handle the failure appropriately
+```
+
+The AI might fail for reasons such as:
+- Insufficient context or information
+- Impossible or contradictory requirements
+- Schema validation issues that cannot be resolved
+
 ## Requirements
 
 - Python 3.10+

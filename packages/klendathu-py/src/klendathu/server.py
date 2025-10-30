@@ -70,6 +70,8 @@ async def create_mcp_server(
     # Shared state for set_result tool
     result_value: Any = None
     result_was_set = False
+    implementation_failed = False
+    failure_reason = ""
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
@@ -119,15 +121,46 @@ async def create_mcp_server(
                     },
                 )
             )
+            tools.append(
+                Tool(
+                    name="fail_implementation",
+                    description=(
+                        "Call this tool if you cannot fulfill the implementation request. "
+                        "Provide a clear reason explaining why the implementation cannot be completed. "
+                        "This will raise an exception with your reason, allowing the caller to handle the failure gracefully."
+                    ),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "reason": {
+                                "type": "string",
+                                "description": "Clear explanation of why the implementation cannot be completed",
+                            }
+                        },
+                        "required": ["reason"],
+                    },
+                )
+            )
 
         return tools
 
     @server.call_tool()
     async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         """Handle tool calls"""
-        nonlocal result_value, result_was_set
+        nonlocal result_value, result_was_set, implementation_failed, failure_reason
 
-        if name == "set_result":
+        if name == "fail_implementation":
+            # Handle failure reporting for implement mode
+            if pydantic_model is None:
+                return [TextContent(type="text", text="Error: fail_implementation tool not available (not in implement mode)")]
+
+            reason = arguments.get("reason", "No reason provided")
+            implementation_failed = True
+            failure_reason = reason
+
+            return [TextContent(type="text", text=f"Implementation failure recorded: {reason}")]
+
+        elif name == "set_result":
             # Handle set_result tool for implement mode
             if pydantic_model is None:
                 return [TextContent(type="text", text="Error: set_result tool not available (not in implement mode)")]
@@ -265,6 +298,8 @@ async def create_mcp_server(
 
     def get_result_fn() -> Any:
         """Get the result (only for implement mode)"""
+        if implementation_failed:
+            raise RuntimeError(f"Implementation failed: {failure_reason}")
         if not result_was_set:
             raise RuntimeError("Result was not set by agent")
         return result_value

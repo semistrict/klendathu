@@ -118,6 +118,7 @@ The Python implementation that provides the same functionality for Python applic
 - **`server.py`**: Creates a Python MCP debug server:
   - Provides `eval` tool that executes Python code
   - Provides `set_result` tool for implement mode (validates against Pydantic model)
+  - Provides `fail_implementation` tool for implement mode (allows agent to report failure with reason)
   - Uses Python's `eval()` with access to `context` (all user-provided variables)
   - Captures stdout/stderr output using `redirect_stdout` and `redirect_stderr`
   - Runs on a random HTTP port by default (using aiohttp)
