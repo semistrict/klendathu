@@ -16,7 +16,18 @@
  * ```
  */
 
-export { investigate } from './launcher.js';
+export { investigate, ContextItem, ContextCallable } from './launcher.js';
+export { implement } from './implement.js';
 export { createMcpServer } from './server.js';
-export type { DebugContext, ServerOptions, LaunchOptions, DebuggerPromise, Summary, StderrMessage } from './types.js';
-export { StderrMessageSchema } from './types.js';
+export type {
+  DebugContext,
+  ImplementContext,
+  ServerOptions,
+  LaunchOptions,
+  ImplementOptions,
+  DebuggerPromise,
+  Summary,
+  StatusMessage,
+  InferSchemaType,
+} from './types.js';
+export { StatusMessageSchema } from './types.js';

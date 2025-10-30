@@ -7,6 +7,7 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:playwright": "cd test-app && NODE_OPTIONS=\"--import=../../klendathu/dist/playwright-hook.js\" npx playwright test",
     "test:openai": "KLENDATHU_PROVIDER=openai KLENDATHU_MODEL=gpt-5 vitest run",
     "test:anthropic": "KLENDATHU_PROVIDER=anthropic vitest run",
     "test:google": "KLENDATHU_PROVIDER=google vitest run",
@@ -17,7 +18,9 @@
   },
   "devDependencies": {
     "@types/node": "^22.18.12",
+    "playwright": "^1.56.1",
     "typescript": "^5.9.3",
-    "vitest": "^2.1.9"
+    "vitest": "^2.1.9",
+    "zod": "^3.25.76"
   }
 }

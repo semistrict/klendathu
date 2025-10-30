@@ -2,23 +2,28 @@ import express from 'express';
 import vm from 'node:vm';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { z } from 'zod';
-import type { DebugContext, ServerOptions } from './types.js';
+import { z, type ZodRawShape } from 'zod';
+import type { DebugContext, ServerOptions, ImplementContext } from './types.js';
 
 export interface McpServerInstance {
   url: string;
   port: number;
   close: () => Promise<void>;
+  getResult?: () => unknown;
 }
 
 /**
  * Creates and starts an HTTP MCP server with debugging tools
  */
-export async function createMcpServer(
-  context: DebugContext,
+export async function createMcpServer<Schema extends ZodRawShape = ZodRawShape>(
+  context: DebugContext | ImplementContext<Schema>,
   options: ServerOptions = {}
 ): Promise<McpServerInstance> {
   const { port = 0, host = 'localhost' } = options;
+
+  // Shared state for set_result tool
+  let resultValue: unknown = undefined;
+  let resultWasSet = false;
 
   // Create a factory function that returns the server with eval tool
   const getServer = () => {
@@ -137,6 +142,61 @@ export async function createMcpServer(
       }
     );
 
+    // Register set_result tool if we're in implement mode
+    if ('schema' in context && context.schema) {
+      server.registerTool(
+        'set_result',
+        {
+          description:
+            'Sets the final result of the implementation by evaluating a function. This tool MUST be called with your completed implementation before finishing. ' +
+            'The function should accept the context object as a parameter and return the implementation result. ' +
+            'The returned value will be validated against the expected schema.',
+          inputSchema: {
+            function: z.string().describe('Function expression that takes context as parameter and returns the result, e.g., "(context) => ({ result: \'value\' })"'),
+          },
+        },
+        async ({ function: fnCode }) => {
+          try {
+            // Execute the function with context (similar to eval)
+            const vmContext = vm.createContext({
+              context: context.context,
+              globalThis,
+            });
+
+            const wrappedCode = `(async () => { const fn = ${fnCode}; return await fn(context); })()`;
+            const result = await vm.runInContext(wrappedCode, vmContext);
+
+            // Validate result against schema
+            const schemaObject = z.object(context.schema);
+            const validated = schemaObject.parse(result);
+            resultValue = validated;
+            resultWasSet = true;
+
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: 'Result set successfully and validated against schema.',
+                },
+              ],
+            };
+          } catch (error) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `Error: ${error instanceof Error ? error.message : String(error)}\n\n${
+                    error instanceof Error && error.stack ? error.stack : ''
+                  }\n\nPlease fix the errors and call set_result again with a valid function.`,
+                },
+              ],
+              isError: true,
+            };
+          }
+        }
+      );
+    }
+
     return server;
   };
 
@@ -190,7 +250,7 @@ export async function createMcpServer(
 
   let isClosed = false;
 
-  return {
+  const instance: McpServerInstance = {
     url,
     port: actualPort,
     close: async () => {
@@ -204,4 +264,16 @@ export async function createMcpServer(
       });
     },
   };
+
+  // Add getResult if in implement mode
+  if ('schema' in context && context.schema) {
+    instance.getResult = () => {
+      if (!resultWasSet) {
+        throw new Error('Result was not set by agent');
+      }
+      return resultValue;
+    };
+  }
+
+  return instance;
 }

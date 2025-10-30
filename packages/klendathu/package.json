@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "express": "^5.1.0",
+    "klendathu-cli": "workspace:*",
     "zod": "^3.25.76"
   },
   "devDependencies": {

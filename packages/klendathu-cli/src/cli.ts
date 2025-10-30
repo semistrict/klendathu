@@ -8,6 +8,9 @@
  */
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import Mustache from 'mustache';
+import { CliInputSchema } from './types.js';
+import { INVESTIGATE_PROMPT_TEMPLATE, IMPLEMENT_PROMPT_TEMPLATE } from './strings.js';
 
 function emitEvent(message: any) {
   console.error(JSON.stringify({ ...message, timestamp: new Date().toISOString() }));
@@ -25,19 +28,22 @@ async function main() {
     process.exit(1);
   }
 
-  // Parse stdin input
-  let input: { mcpUrl: string; prompt: string; callerDir?: string };
+  // Parse and validate stdin input
+  let input;
   try {
-    input = JSON.parse(stdinData);
-    if (!input.mcpUrl || !input.prompt) {
-      throw new Error('Missing required fields: mcpUrl and prompt');
-    }
+    const rawInput = JSON.parse(stdinData);
+    input = CliInputSchema.parse(rawInput);
   } catch (error) {
     emitEvent({ type: 'log', message: `Error: Invalid stdin input: ${error}` });
     process.exit(1);
   }
 
-  const { mcpUrl, prompt } = input;
+  // Build prompt from template based on mode
+  const prompt = input.mode === 'investigate'
+    ? Mustache.render(INVESTIGATE_PROMPT_TEMPLATE, input)
+    : Mustache.render(IMPLEMENT_PROMPT_TEMPLATE, input);
+
+  const { mcpUrl } = input;
 
   emitEvent({ type: 'log', message: `Connecting to MCP server at ${mcpUrl}...` });
 

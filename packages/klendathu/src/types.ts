@@ -1,4 +1,14 @@
-import { z } from 'zod';
+import { z, type ZodRawShape, type ZodTypeAny } from 'zod';
+import type { StatusMessage, Summary } from 'klendathu-cli/types';
+import { StatusMessageSchema } from 'klendathu-cli/types';
+
+export type { StatusMessage, Summary };
+export { StatusMessageSchema };
+
+/**
+ * Infer the output type from a ZodRawShape (same as MCP SDK)
+ */
+export type InferSchemaType<Schema extends ZodRawShape> = z.objectOutputType<Schema, ZodTypeAny>;
 
 /**
  * Context captured for debugging
@@ -12,6 +22,22 @@ export interface DebugContext {
   timestamp: string;
   /** Process ID where error occurred */
   pid: number;
+}
+
+/**
+ * Context for implementation mode
+ */
+export interface ImplementContext<Schema extends ZodRawShape = ZodRawShape> {
+  /** Context variables to make available in eval */
+  context: Record<string, unknown>;
+  /** Descriptions for context variables */
+  contextDescriptions: Record<string, string>;
+  /** When the context was captured */
+  timestamp: string;
+  /** Process ID where implementation started */
+  pid: number;
+  /** Zod schema for validating the result */
+  schema: Schema;
 }
 
 /**
@@ -37,62 +63,23 @@ export interface LaunchOptions extends ServerOptions {
 }
 
 /**
- * Stderr protocol messages - all stderr output is JSON parseable
+ * Options for implementation mode
  */
-export const StderrMessageSchema = z.discriminatedUnion('type', [
-  z.object({
-    type: z.literal('log'),
-    message: z.string(),
-    timestamp: z.string(),
-  }),
-  z.object({
-    type: z.literal('server_started'),
-    url: z.string(),
-    timestamp: z.string(),
-  }),
-  z.object({
-    type: z.literal('turn'),
-    turnNumber: z.number(),
-    stopReason: z.string().optional(),
-    timestamp: z.string(),
-  }),
-  z.object({
-    type: z.literal('tool_call'),
-    toolName: z.string(),
-    input: z.record(z.unknown()),
-    timestamp: z.string(),
-  }),
-  z.object({
-    type: z.literal('tool_result'),
-    toolName: z.string(),
-    resultPreview: z.string(),
-    timestamp: z.string(),
-  }),
-  z.object({
-    type: z.literal('summary'),
-    turns: z.number(),
-    cost: z.number(),
-    finishReason: z.string().optional(),
-    inputTokens: z.number().optional(),
-    outputTokens: z.number().optional(),
-    totalTokens: z.number().optional(),
-    reasoningTokens: z.number().optional(),
-    cachedInputTokens: z.number().optional(),
-    toolCallsCount: z.number().optional(),
-    warnings: z.array(z.string()).optional(),
-    timestamp: z.string(),
-  }),
-]);
-
-export type StderrMessage = z.infer<typeof StderrMessageSchema>;
-export type Summary = Extract<StderrMessage, { type: 'summary' }>;
+export interface ImplementOptions extends ServerOptions {
+  /** Path to claudedebug CLI executable (default: auto-detect) */
+  cliPath?: string;
+  /** AbortSignal to cancel the implementation */
+  signal?: AbortSignal;
+  /** Additional instructions to include in the implementation prompt */
+  extraInstructions?: string;
+}
 
 /**
- * Promise that resolves to Claude's analysis with streaming debug info
+ * Promise that resolves to Claude's analysis with streaming status info
  */
 export interface DebuggerPromise extends Promise<string> {
-  /** Stream of structured stderr messages as the investigation progresses */
-  readonly stderr: AsyncIterable<StderrMessage>;
+  /** Stream of structured status messages as the investigation progresses */
+  readonly stderr: AsyncIterable<StatusMessage>;
   /** Promise that resolves to summary statistics when investigation completes */
   readonly summary: Promise<Summary>;
 }

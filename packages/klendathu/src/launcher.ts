@@ -1,13 +1,6 @@
-import { spawn } from 'node:child_process';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import type { DebugContext, LaunchOptions, DebuggerPromise, StderrMessage, Summary } from './types.js';
-import { StderrMessageSchema } from './types.js';
+import type { DebugContext, LaunchOptions, DebuggerPromise, StatusMessage, Summary } from './types.js';
 import { createMcpServer } from './server.js';
-
-function emitEvent(message: { type: string; [key: string]: any }) {
-  console.error(JSON.stringify({ ...message, timestamp: new Date().toISOString() }));
-}
+import { extractCallStack, buildContext, emitEvent, runAgent } from './agent-runner.js';
 
 export class ContextItem {
   constructor(public value: unknown, public description?: string) {}
@@ -43,58 +36,24 @@ export function investigate(
   },
   options: InvestigateOptions = {}
 ): DebuggerPromise {
-  // Capture caller's file path from stack trace
-  const callerStack = new Error().stack || '';
-  let callerDir: string | undefined;
-
-  const stackLines = callerStack.split('\n');
-  // Skip first 2 lines (Error message and investigate() itself)
-  for (let i = 2; i < stackLines.length; i++) {
-    const line = stackLines[i];
-    const match = line.match(/\(([^:)]+):\d+:\d+\)/) || line.match(/at ([^:]+):\d+:\d+/);
-    if (match) {
-      const filePath = match[1];
-      if (!filePath.includes('node_modules') && !filePath.startsWith('node:')) {
-        try {
-          const actualPath = filePath.startsWith('file://')
-            ? fileURLToPath(filePath)
-            : filePath;
-          callerDir = dirname(actualPath);
-          break;
-        } catch {
-          // Continue to next line
-        }
-      }
-    }
-  }
-
   // Build context from input
-  const contextEntries = context || {};
-  const contextVars: Record<string, unknown> = {};
-  const contextDescriptions: Record<string, string> = {};
+  const { contextVars, contextItems } = buildContext(context);
 
-  for (const [key, value] of Object.entries(contextEntries)) {
-    if (value instanceof ContextItem) {
-      contextVars[key] = value.value;
-      if (value.description) {
-        contextDescriptions[key] = value.description;
-      }
-    } else {
-      contextVars[key] = value;
-    }
-  }
+  // Extract call stack - pass the error if it exists in context
+  const error = contextVars.error instanceof Error ? contextVars.error : undefined;
+  const callStack = extractCallStack(error, 2);
 
   const timestamp = new Date().toISOString();
   const pid = process.pid;
 
   const debugContext: DebugContext = {
     context: contextVars,
-    contextDescriptions,
+    contextDescriptions: {},
     timestamp,
     pid,
   };
 
-  const stderrMessages: StderrMessage[] = [];
+  const stderrMessages: StatusMessage[] = [];
   let summaryResolve: ((summary: Summary) => void) | undefined;
   let summaryReject: ((error: Error) => void) | undefined;
 
@@ -109,115 +68,26 @@ export function investigate(
 
     emitEvent({ type: 'server_started', url: mcpServer.url });
 
-    // Find CLI path
-    const cliPath = options.cliPath || findCliPath();
-
-    // Build dynamic prompt
-    let prompt = `Execution is currently paused at:\n\n`;
-
-    // Add stack trace if error exists
-    if (contextVars.error && contextVars.error instanceof Error && contextVars.error.stack) {
-      prompt += `<error_stack>\n${contextVars.error.stack}\n</error_stack>\n\n`;
-    } else {
-      prompt += `<execution_point>PID ${pid} at ${timestamp}</execution_point>\n\n`;
-    }
-
-    prompt += `<available_context>\n`;
-    for (const [key, value] of Object.entries(contextVars)) {
-      const desc = contextDescriptions[key];
-      if (desc) {
-        prompt += `- ${key}: ${desc}\n`;
-      } else {
-        prompt += `- ${key}: ${typeof value}\n`;
-      }
-    }
-    prompt += `</available_context>\n`;
-
-    prompt += `\n<instructions>\n`;
-    prompt += `You have access to an "eval" MCP tool that can execute JavaScript functions with access to the error context.\n\n`;
-    prompt += `The eval tool accepts a "function" parameter containing a JavaScript function expression like: "async () => { return someVariable; }"\n\n`;
-    prompt += `Available in the eval context:\n`;
-    prompt += `- context: Object containing all captured context variables\n`;
-    prompt += `- All Node.js globals: console, process, Buffer, Promise, etc.\n\n`;
-    prompt += `Your investigation should:\n`;
-    prompt += `1. Use eval to inspect context variables as needed\n`;
-    prompt += `2. Use console.log() inside eval functions - all console output will be captured and returned to you\n\n`;
-    prompt += `After your investigation, provide:\n`;
-    prompt += `- A clear description of what happened\n`;
-    prompt += `- The root cause based on the context\n`;
-    prompt += `- Specific suggestions for how to fix it\n`;
-    prompt += `</instructions>\n\n`;
-    prompt += `Begin your investigation now.`;
-
-    if (options.extraInstructions) {
-      prompt += `\n\n<additional_instructions>\n${options.extraInstructions}\n</additional_instructions>`;
-    }
-
-    emitEvent({ type: 'log', message: `Launching debugger: node ${cliPath}` });
-
-    // Spawn the CLI with Node.js (no args, all data via stdin)
-    const child = spawn('node', [cliPath], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: process.env,
-    });
-
-    // Send all data as JSON to stdin
-    const stdinData = JSON.stringify({
+    // Run the agent with structured data
+    const { exitCode, stdout } = await runAgent({
+      mode: 'investigate',
       mcpUrl: mcpServer.url,
-      prompt,
-      callerDir,
-    });
-    child.stdin?.write(stdinData);
-    child.stdin?.end();
-
-    let stdout = '';
-    let stderrBuffer = '';
-
-    // Parse stderr line-by-line as JSON messages
-    child.stderr?.on('data', (data) => {
-      stderrBuffer += data.toString();
-      const lines = stderrBuffer.split('\n');
-      stderrBuffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const parsed = JSON.parse(line);
-          const message = StderrMessageSchema.parse(parsed);
-          stderrMessages.push(message);
-
-          if (message.type === 'summary' && summaryResolve) {
-            summaryResolve(message);
-          }
-        } catch (err) {
-          // Ignore malformed JSON lines
-          console.warn('Failed to parse stderr line:', line, err);
+      callStack,
+      context: contextItems,
+      timestamp,
+      pid,
+      extraInstructions: options.extraInstructions,
+      cliPath: options.cliPath,
+      signal: options.signal,
+      onStderr: (message) => {
+        stderrMessages.push(message);
+        if (message.type === 'summary' && summaryResolve) {
+          summaryResolve(message);
         }
-      }
+      },
     });
 
-    child.stdout?.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    // Handle cleanup
-    const cleanup = async () => {
-      await mcpServer.close();
-    };
-
-    // Handle abort signal
-    if (options.signal) {
-      options.signal.addEventListener('abort', () => {
-        child.kill('SIGTERM');
-      });
-    }
-
-    // Wait for process to close
-    const exitCode = await new Promise<number | null>((resolve) => {
-      child.on('close', (code) => resolve(code));
-    });
-
-    await cleanup();
+    await mcpServer.close();
 
     if (exitCode !== 0) {
       const error = new Error(`Debugger exited with code ${exitCode}`);
@@ -268,21 +138,4 @@ export function investigate(
   });
 
   return mainPromise;
-}
-
-/**
- * Attempts to find the claudedebug CLI executable
- */
-function findCliPath(): string {
-  // TODO(agent): Implement proper CLI path resolution
-  // Options to try in order:
-  // 1. Global install: 'claudedebug' in PATH
-  // 2. Local monorepo: relative path during development
-  // 3. Package bin: when installed as dependency
-
-  // For now, assume it's in the monorepo during development
-  const currentFile = fileURLToPath(import.meta.url);
-  const cliPath = resolve(currentFile, '../../../klendathu-cli/dist/cli.js');
-
-  return cliPath;
 }
