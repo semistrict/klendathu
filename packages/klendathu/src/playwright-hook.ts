@@ -13,6 +13,46 @@ const Module = require('module');
 TRACE`Playwright hook loaded`;
 
 const KLENDATHU_PATCHED = Symbol('klendathu.patched');
+const KLENDATHU_FIXTURES = Symbol('klendathu.fixtures');
+
+interface KlendathuExt {
+  page?: any;
+  context?: any;
+  browser?: any;
+  request?: any;
+}
+
+declare global {
+  interface Function {
+    [KLENDATHU_PATCHED]?: boolean;
+    [KLENDATHU_FIXTURES]?: KlendathuExt;
+  }
+}
+
+/**
+ * Helper function to perform investigation on test/step failures
+ * Ensures both test and step failures receive consistent context
+ */
+async function performInvestigation(
+  error: Error,
+  title: string,
+  titleType: 'testTitle' | 'stepTitle',
+  fixtures: { page?: any; context?: any; browser?: any; request?: any }
+): Promise<string> {
+  const params: any = {
+    error,
+    page: fixtures.page,
+    context: fixtures.context,
+    browser: fixtures.browser,
+    request: fixtures.request,
+    extraInstructions: titleType === 'testTitle'
+      ? 'This is a Playwright test failure. You have access to the live browser via the `page` object in context. CRITICAL: You MUST test all assumptions using the page object before stating anything. Do NOT make suppositions - verify everything explicitly. If you think a selector is wrong, use eval to test the selector you believe is correct. Use `context.page.locator("#element-id").textContent()` or `context.page.evaluate(() => document.querySelector("#element-id")?.innerHTML)` to inspect actual DOM state. Test alternative selectors, check element visibility, verify actual vs expected values. Only report findings that you have explicitly confirmed via the page object.'
+      : 'This is a Playwright test step failure. You have access to the live browser via the `page` object in context. CRITICAL: You MUST test all assumptions using the page object before stating anything. Do NOT make suppositions - verify everything explicitly. If you think a selector is wrong, use eval to test the selector you believe is correct. Use `context.page.locator("#element-id").textContent()` or `context.page.evaluate(() => document.querySelector("#element-id")?.innerHTML)` to inspect actual DOM state. Test alternative selectors, check element visibility, verify actual vs expected values. Only report findings that you have explicitly confirmed via the page object.'
+  };
+  params[titleType] = title;
+
+  return investigate(params);
+}
 
 declare global {
   interface Function {
@@ -39,6 +79,8 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
 
       return originalTest.call(this, title, async function (this: any, { page, context, browser, request }: any, testInfo: any) {
         TRACE`Starting test execution: ${title}`;
+        // Store fixtures in wrapped test for access in step handler
+        wrappedTest[KLENDATHU_FIXTURES] = { page, context, browser, request };
         try {
           // Call original test function with fixtures
           const result = await testFn.call(this, { page, context, browser, request }, testInfo);
@@ -50,15 +92,12 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
 
           try {
             TRACE`Starting investigation for test: ${title}`;
-            const investigation = await investigate({
-              error: error instanceof Error ? error : new Error(String(error)),
-              page,
-              context,
-              browser,
-              request,
-              testTitle: title,
-              extraInstructions: 'This is a Playwright test failure. You have access to the live browser via the `page` object in context. CRITICAL: You MUST test all assumptions using the page object before stating anything. Do NOT make suppositions - verify everything explicitly. If you think a selector is wrong, use eval to test the selector you believe is correct. Use `context.page.locator("#element-id").textContent()` or `context.page.evaluate(() => document.querySelector("#element-id")?.innerHTML)` to inspect actual DOM state. Test alternative selectors, check element visibility, verify actual vs expected values. Only report findings that you have explicitly confirmed via the page object.'
-            });
+            const investigation = await performInvestigation(
+              error instanceof Error ? error : new Error(String(error)),
+              title,
+              'testTitle',
+              { page, context, browser, request }
+            );
 
             TRACE`Investigation completed for test: ${title}`;
             console.error('\n📋 Klendathu Investigation:\n');
@@ -115,11 +154,16 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
 
           try {
             TRACE`Starting investigation for step: ${title}`;
-            const investigation = await investigate({
-              error: error instanceof Error ? error : new Error(String(error)),
-              stepTitle: title,
-              extraInstructions: 'This is a Playwright test step failure. If you have access to the `page` object in context via eval MCP tool, you MUST test all assumptions before stating anything. Do NOT make suppositions - verify everything explicitly. If you think a selector is wrong, test the selector you believe is correct using eval. Use `context.page.locator("#element-id").textContent()` or `context.page.evaluate(() => document.querySelector("#element-id")?.innerHTML)` to inspect actual DOM state. Test alternative selectors, check element visibility, verify actual vs expected values. Only report findings that you have explicitly confirmed via the page object. If you do not have access to the page object, analyze the error and suggest how to fix the test.'
-            });
+            const fixtures = wrappedTest[KLENDATHU_FIXTURES];
+            if (!fixtures) {
+              throw new Error('Test fixtures not available in step handler');
+            }
+            const investigation = await performInvestigation(
+              error instanceof Error ? error : new Error(String(error)),
+              title,
+              'stepTitle',
+              fixtures
+            );
 
             TRACE`Investigation completed for step: ${title}`;
             console.error('\n📋 Klendathu Investigation:\n');
