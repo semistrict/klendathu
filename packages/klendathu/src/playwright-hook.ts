@@ -85,8 +85,11 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
 
         // Store fixtures in ALS for access by step handlers
         const fixtures: PlaywrightFixtures = { page, context, browser, request };
+        TRACE`Storing fixtures in ALS for test: ${title}`;
 
         return fixturesStorage.run(fixtures, async () => {
+          TRACE`Inside ALS.run for test: ${title}`;
+
           try {
             // Call original test function with fixtures
             const result = await testFn.call(this, { page, context, browser, request }, testInfo);
@@ -125,19 +128,8 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
     Object.assign(wrappedTest, originalTest);
     wrappedTest[KLENDATHU_PATCHED] = true;
 
-    // Intercept .extend() to wrap extended test objects
-    if (typeof originalTest.extend === 'function') {
-      const originalExtend = originalTest.extend.bind(originalTest);
-      wrappedTest.extend = function(fixtures: any) {
-        TRACE`test.extend() called, wrapping extended test object`;
-        const extendedTest = originalExtend(fixtures);
-        // Recursively wrap the extended test
-        return wrapTestObject(extendedTest, moduleName);
-      };
-    }
-
-    // Patch test.step to use ALS for fixtures
-    if (typeof (wrappedTest as any).step === 'function') {
+    // Patch test.step to use ALS for fixtures (MUST be after Object.assign!)
+    if (typeof (wrappedTest as any).step === 'function' && !(wrappedTest as any).step[KLENDATHU_PATCHED]) {
       const originalStep = (wrappedTest as any).step.bind(wrappedTest);
 
       (wrappedTest as any).step = async function<T>(
@@ -157,8 +149,9 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
           try {
             TRACE`Starting investigation for step: ${stepTitle}`;
             const fixtures = fixturesStorage.getStore();
+            TRACE`Retrieved fixtures from ALS: ${fixtures ? 'found' : 'NOT FOUND'}`;
             if (!fixtures) {
-              throw new Error('Fixtures not available in AsyncLocalStorage');
+              throw new Error('Fixtures not available in AsyncLocalStorage - this likely means test.step was called outside of a test function that was wrapped by klendathu');
             }
 
             const investigation = await performInvestigation(
@@ -182,6 +175,17 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
       };
 
       (wrappedTest as any).step[KLENDATHU_PATCHED] = true;
+    }
+
+    // Intercept .extend() to wrap extended test objects (MUST be after Object.assign!)
+    if (typeof originalTest.extend === 'function') {
+      const originalExtend = originalTest.extend.bind(originalTest);
+      wrappedTest.extend = function(fixtures: any) {
+        TRACE`test.extend() called, wrapping extended test object`;
+        const extendedTest = originalExtend(fixtures);
+        // Recursively wrap the extended test
+        return wrapTestObject(extendedTest, moduleName);
+      };
     }
 
   return wrappedTest;
