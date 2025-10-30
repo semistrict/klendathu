@@ -4,6 +4,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z, type ZodRawShape } from 'zod';
 import type { DebugContext, ServerOptions, ImplementContext } from './types.js';
+import { TRACE } from 'klendathu-utils/logging';
 
 export interface McpServerInstance {
   url: string;
@@ -53,6 +54,7 @@ export async function createMcpServer<Schema extends ZodRawShape = ZodRawShape>(
         },
       },
       async ({ function: fnCode }) => {
+        TRACE`MCP eval tool called with function: ${fnCode.substring(0, 200)}${fnCode.length > 200 ? '...' : ''}`;
         try {
           // Capture console output
           const consoleLogs: Array<{ level: string; args: any[] }> = [];
@@ -118,6 +120,7 @@ export async function createMcpServer<Schema extends ZodRawShape = ZodRawShape>(
             }));
           }
 
+          TRACE`MCP eval tool succeeded, result: ${JSON.stringify(output).substring(0, 500)}`;
           return {
             content: [
               {
@@ -127,6 +130,7 @@ export async function createMcpServer<Schema extends ZodRawShape = ZodRawShape>(
             ],
           };
         } catch (error) {
+          TRACE`MCP eval tool error: ${error}`;
           return {
             content: [
               {
@@ -156,43 +160,31 @@ export async function createMcpServer<Schema extends ZodRawShape = ZodRawShape>(
           },
         },
         async ({ function: fnCode }) => {
-          try {
-            // Execute the function with context (similar to eval)
-            const vmContext = vm.createContext({
-              context: context.context,
-              globalThis,
-            });
+          TRACE`MCP set_result tool called with function: ${fnCode.substring(0, 200)}${fnCode.length > 200 ? '...' : ''}`;
+          // Execute the function with context (similar to eval)
+          const vmContext = vm.createContext({
+            context: context.context,
+            globalThis,
+          });
 
-            const wrappedCode = `(async () => { const fn = ${fnCode}; return await fn(context); })()`;
-            const result = await vm.runInContext(wrappedCode, vmContext);
+          const wrappedCode = `(async () => { const fn = ${fnCode}; return await fn(context); })()`;
+          const result = await vm.runInContext(wrappedCode, vmContext);
 
-            // Validate result against schema
-            const schemaObject = z.object(context.schema);
-            const validated = schemaObject.parse(result);
-            resultValue = validated;
-            resultWasSet = true;
+          // Validate result against schema
+          const schemaObject = z.object(context.schema);
+          const validated = schemaObject.parse(result);
+          resultValue = validated;
+          resultWasSet = true;
 
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: 'Result set successfully and validated against schema.',
-                },
-              ],
-            };
-          } catch (error) {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: `Error: ${error instanceof Error ? error.message : String(error)}\n\n${
-                    error instanceof Error && error.stack ? error.stack : ''
-                  }\n\nPlease fix the errors and call set_result again with a valid function.`,
-                },
-              ],
-              isError: true,
-            };
-          }
+          TRACE`MCP set_result tool succeeded, validated result: ${JSON.stringify(validated).substring(0, 500)}`;
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'Result set successfully and validated against schema.',
+              },
+            ],
+          };
         }
       );
     }

@@ -126,7 +126,7 @@ async function main() {
     const toolCalls = new Map<string, string>();
 
     for await (const message of result) {
-      TRACE`Received message type: ${message.type}`;
+      TRACE`Received message: ${JSON.stringify(message)}`;
       if (message.type === 'assistant') {
         turnNumber++;
         emitEvent({
@@ -169,6 +169,7 @@ async function main() {
         }
       } else if (message.type === 'result') {
         if (message.subtype === 'success') {
+          TRACE`Final result: ${message.result}`;
           console.log('\n--- Final Result ---');
           console.log(message.result);
 
@@ -179,6 +180,7 @@ async function main() {
             turns: message.num_turns,
           });
         } else {
+          TRACE`Investigation failed with subtype: ${message.subtype}`;
           emitEvent({ type: 'log', message: `Error: ${message.subtype}` });
           process.exit(1);
         }

@@ -57,7 +57,7 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
               browser,
               request,
               testTitle: title,
-              extraInstructions: 'This is a Playwright test failure. You have access to the live browser via the `page` object in context. Use the eval MCP tool to inspect the DOM state: try `context.page.locator("#element-id").textContent()` or `context.page.evaluate(() => document.querySelector("#element-id")?.innerHTML)` to see actual rendered content. Compare the actual DOM state with expected values to diagnose the issue.'
+              extraInstructions: 'This is a Playwright test failure. You have access to the live browser via the `page` object in context. CRITICAL: You MUST test all assumptions using the page object before stating anything. Do NOT make suppositions - verify everything explicitly. If you think a selector is wrong, use eval to test the selector you believe is correct. Use `context.page.locator("#element-id").textContent()` or `context.page.evaluate(() => document.querySelector("#element-id")?.innerHTML)` to inspect actual DOM state. Test alternative selectors, check element visibility, verify actual vs expected values. Only report findings that you have explicitly confirmed via the page object.'
             });
 
             TRACE`Investigation completed for test: ${title}`;
@@ -90,11 +90,8 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
       };
     }
 
-    TRACE`Wrapped test function created for module: ${moduleName}`;
-
     // Also patch test.step if it exists
     if (typeof wrappedTest.step === 'function') {
-      TRACE`Patching test.step for module: ${moduleName}`;
       const originalStep = wrappedTest.step.bind(wrappedTest);
 
       wrappedTest.step = async function interceptedStep<T>(
@@ -121,7 +118,7 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
             const investigation = await investigate({
               error: error instanceof Error ? error : new Error(String(error)),
               stepTitle: title,
-              extraInstructions: 'This is a Playwright test step failure. If you have access to the `page` object in context via eval MCP tool, use it to inspect the live DOM state and compare with expected values. Otherwise analyze the error and suggest how to fix the test.'
+              extraInstructions: 'This is a Playwright test step failure. If you have access to the `page` object in context via eval MCP tool, you MUST test all assumptions before stating anything. Do NOT make suppositions - verify everything explicitly. If you think a selector is wrong, test the selector you believe is correct using eval. Use `context.page.locator("#element-id").textContent()` or `context.page.evaluate(() => document.querySelector("#element-id")?.innerHTML)` to inspect actual DOM state. Test alternative selectors, check element visibility, verify actual vs expected values. Only report findings that you have explicitly confirmed via the page object. If you do not have access to the page object, analyze the error and suggest how to fix the test.'
             });
 
             TRACE`Investigation completed for step: ${title}`;
@@ -151,7 +148,6 @@ Module._load = function (request: string, parent: any, isMain: boolean) {
 
   // Check if this module has a test object
   if (module && module.test && !module.test[KLENDATHU_PATCHED]) {
-    TRACE`Found test object in module: ${request}, patching...`;
     const wrappedTest = wrapTestObject(module.test, request);
 
     // Wrap module in a Proxy to intercept test access
@@ -163,7 +159,6 @@ Module._load = function (request: string, parent: any, isMain: boolean) {
         return target[prop];
       }
     });
-    TRACE`Created proxy for module: ${request}`;
   }
 
   return module;
