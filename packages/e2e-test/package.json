@@ -7,7 +7,7 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:playwright": "cd test-app && NODE_OPTIONS=\"--import=../../klendathu/dist/playwright-hook.js\" npx playwright test",
+    "test:playwright": "cd test-app && ../../klendathu-cli/dist/cli.js npx playwright test",
     "test:openai": "KLENDATHU_PROVIDER=openai KLENDATHU_MODEL=gpt-5 vitest run",
     "test:anthropic": "KLENDATHU_PROVIDER=anthropic vitest run",
     "test:google": "KLENDATHU_PROVIDER=google vitest run",

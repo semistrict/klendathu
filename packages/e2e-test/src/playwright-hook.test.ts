@@ -9,7 +9,7 @@ const __dirname = dirname(__filename);
 describe('playwright-hook', () => {
   it('should intercept Playwright test failures and trigger investigation', async () => {
     const testAppDir = join(__dirname, '..', 'test-app');
-    const hookPath = join(__dirname, '..', '..', 'klendathu', 'dist', 'playwright-hook.js');
+    const klendathuCli = join(__dirname, '..', '..', 'klendathu-cli', 'dist', 'cli.js');
 
     const result = await new Promise<{
       stdout: string;
@@ -17,14 +17,11 @@ describe('playwright-hook', () => {
       exitCode: number;
     }>((resolve) => {
       const proc = spawn(
-        'npx',
-        ['playwright', 'test', 'playwright-hook-target.test.ts'],
+        klendathuCli,
+        ['npx', 'playwright', 'test', 'playwright-hook-target.test.ts'],
         {
           cwd: testAppDir,
-          env: {
-            ...process.env,
-            NODE_OPTIONS: `--import=${hookPath}`,
-          },
+          env: process.env,
         }
       );
 

@@ -176,8 +176,10 @@ Get your API key from the [Anthropic Console](https://console.anthropic.com/).
   - Returns typed result matching the schema
 
 - **`playwright-hook.ts`**: Auto-investigation on Playwright test failures
-  - Import via `NODE_OPTIONS="--import=klendathu/playwright-hook"`
+  - Use via `klendathu playwright test` (or any test command)
+  - The CLI automatically adds the Playwright hook via NODE_OPTIONS
   - Intercepts test failures and spawns investigation automatically
+  - Can also use directly: `NODE_OPTIONS="--import=klendathu/playwright-hook" playwright test`
 
 ## Future: Multi-Language Support
 

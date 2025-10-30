@@ -5,3 +5,5 @@ dist/
 .env
 .tmp/
 *.tsbuildinfo
+__pycache__
+*.egg-info/

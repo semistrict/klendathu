@@ -1,10 +1,11 @@
 import { spawn } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { StatusMessageSchema } from 'klendathu-cli/types';
+import { StatusMessageSchema } from 'klendathu-utils/types';
 import type { StatusMessage } from './types.js';
 import { ContextItem } from './launcher.js';
-import type { StackFrame, ContextItem as ContextItemType } from 'klendathu-cli/types';
+import type { StackFrame, ContextItem as ContextItemType } from 'klendathu-utils/types';
+import { TRACE } from 'klendathu-utils/logging';
 
 export function emitEvent(message: { type: string; [key: string]: any }) {
   console.error(JSON.stringify({ ...message, timestamp: new Date().toISOString() }));
@@ -167,17 +168,21 @@ export async function runAgent(params: {
   signal?: AbortSignal;
   onStderr?: (message: StatusMessage) => void;
 }): Promise<{ exitCode: number | null; stdout: string }> {
+  TRACE`runAgent() called with mode: ${params.mode}`;
   const { mode, mcpUrl, callStack, context, timestamp, pid, extraInstructions, prompt, schema, cliPath, signal, onStderr } = params;
 
   const resolvedCliPath = cliPath || findCliPath();
+  TRACE`Resolved CLI path: ${resolvedCliPath}`;
 
   emitEvent({ type: 'log', message: `Launching ${mode}: node ${resolvedCliPath}` });
 
   // Spawn the CLI with Node.js
+  TRACE`Spawning child process: node ${resolvedCliPath}`;
   const child = spawn('node', [resolvedCliPath], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: process.env,
   });
+  TRACE`Child process spawned with PID: ${child.pid}`;
 
   // Build structured input based on mode
   const input: any = {
@@ -197,8 +202,10 @@ export async function runAgent(params: {
 
   // Send structured data as JSON to stdin
   const stdinData = JSON.stringify(input);
+  TRACE`Sending ${stdinData.length} bytes to child stdin`;
   child.stdin?.write(stdinData);
   child.stdin?.end();
+  TRACE`Stdin closed`;
 
   let stdout = '';
   let stderrBuffer = '';
@@ -235,9 +242,14 @@ export async function runAgent(params: {
   }
 
   // Wait for process to close
+  TRACE`Waiting for child process to close`;
   const exitCode = await new Promise<number | null>((resolve) => {
-    child.on('close', (code) => resolve(code));
+    child.on('close', (code) => {
+      TRACE`Child process closed with exit code: ${code}`;
+      resolve(code);
+    });
   });
 
+  TRACE`runAgent() returning with exitCode: ${exitCode}, stdout length: ${stdout.length}`;
   return { exitCode, stdout };
 }

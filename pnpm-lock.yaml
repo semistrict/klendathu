@@ -48,9 +48,9 @@ importers:
       express:
         specifier: ^5.1.0
         version: 5.1.0
-      klendathu-cli:
+      klendathu-utils:
         specifier: workspace:*
-        version: link:../klendathu-cli
+        version: link:../klendathu-utils
       zod:
         specifier: ^3.25.76
         version: 3.25.76
@@ -82,6 +82,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.20.2
         version: 1.20.2
+      klendathu-utils:
+        specifier: workspace:*
+        version: link:../klendathu-utils
       mustache:
         specifier: ^4.2.0
         version: 4.2.0
@@ -104,6 +107,19 @@ importers:
       vite:
         specifier: ^7.1.12
         version: 7.1.12(@types/node@22.18.12)
+
+  packages/klendathu-utils:
+    dependencies:
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.18.12
+        version: 22.18.12
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
 
 packages:
 

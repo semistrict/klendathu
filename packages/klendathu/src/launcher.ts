@@ -1,6 +1,7 @@
 import type { DebugContext, DebuggerPromise, StatusMessage, Summary } from './types.js';
 import { createMcpServer } from './server.js';
 import { extractCallStack, buildContext, emitEvent, runAgent } from './agent-runner.js';
+import { TRACE } from 'klendathu-utils/logging';
 
 export class ContextItem {
   constructor(public value: unknown, public description?: string) {}
@@ -36,12 +37,14 @@ export function investigate(
   },
   options: InvestigateOptions = {}
 ): DebuggerPromise {
+  TRACE`investigate() called`;
   // Build context from input
   const { contextVars, contextItems } = buildContext(context);
 
   // Extract call stack - pass the error if it exists in context
   const error = contextVars.error instanceof Error ? contextVars.error : undefined;
   const callStack = extractCallStack(error, 2);
+  TRACE`Extracted call stack with ${callStack.length} frames`;
 
   const timestamp = new Date().toISOString();
   const pid = process.pid;
@@ -64,11 +67,14 @@ export function investigate(
 
   const mainPromise = (async () => {
     // Start MCP server
+    TRACE`Creating MCP server`;
     const mcpServer = await createMcpServer(debugContext, options);
+    TRACE`MCP server started at ${mcpServer.url}`;
 
     emitEvent({ type: 'server_started', url: mcpServer.url });
 
     // Run the agent with structured data
+    TRACE`Running agent`;
     const { exitCode, stdout } = await runAgent({
       mode: 'investigate',
       mcpUrl: mcpServer.url,
@@ -87,7 +93,9 @@ export function investigate(
       },
     });
 
+    TRACE`Agent completed with exit code: ${exitCode}`;
     await mcpServer.close();
+    TRACE`MCP server closed`;
 
     if (exitCode !== 0) {
       const error = new Error(`Debugger exited with code ${exitCode}`);
@@ -95,6 +103,7 @@ export function investigate(
       throw error;
     }
 
+    TRACE`Investigation complete, returning stdout`;
     return stdout;
   })() as DebuggerPromise;
 

@@ -5,23 +5,74 @@
  *
  * Usage:
  *   klendathu http://localhost:2839/mcp
+ *   klendathu playwright test   # Runs command with Playwright hook
  */
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import Mustache from 'mustache';
-import { CliInputSchema } from './types.js';
+import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import { CliInputSchema } from 'klendathu-utils/types';
 import { INVESTIGATE_PROMPT_TEMPLATE, IMPLEMENT_PROMPT_TEMPLATE } from './strings.js';
+import { TRACE } from 'klendathu-utils/logging';
 
 function emitEvent(message: any) {
   console.error(JSON.stringify({ ...message, timestamp: new Date().toISOString() }));
 }
 
+async function runWithPlaywrightHook(args: string[]) {
+  TRACE`runWithPlaywrightHook called with args: ${JSON.stringify(args)}`;
+  // Resolve path to playwright-hook
+  const cliPath = fileURLToPath(import.meta.url);
+  const cliDir = dirname(cliPath);
+  // Go up from klendathu-cli/dist to klendathu-cli, then to packages, then to klendathu
+  const klendathuPath = join(cliDir, '..', '..', 'klendathu', 'dist', 'playwright-hook.js');
+  TRACE`Resolved playwright-hook path: ${klendathuPath}`;
+
+  const nodeOptions = process.env.NODE_OPTIONS || '';
+  const newNodeOptions = `${nodeOptions} --import=${klendathuPath}`.trim();
+  TRACE`NODE_OPTIONS: ${newNodeOptions}`;
+
+  const [command, ...commandArgs] = args;
+  TRACE`Spawning: ${command} ${commandArgs.join(' ')}`;
+  const child = spawn(command, commandArgs, {
+    env: {
+      ...process.env,
+      NODE_OPTIONS: newNodeOptions,
+    },
+    stdio: 'inherit',
+  });
+  TRACE`Child process spawned with PID: ${child.pid}`;
+
+  return new Promise<number>((resolve) => {
+    child.on('close', (code) => {
+      TRACE`Child process exited with code: ${code}`;
+      resolve(code || 0);
+    });
+  });
+}
+
 async function main() {
+  TRACE`CLI main() started, PID: ${process.pid}`;
+  // Check if CLI was invoked with arguments
+  const args = process.argv.slice(2);
+  TRACE`CLI arguments: ${JSON.stringify(args)}`;
+  if (args.length > 0) {
+    TRACE`Running in command-with-hook mode`;
+    // Run command with Playwright hook
+    const exitCode = await runWithPlaywrightHook(args);
+    TRACE`Exiting with code: ${exitCode}`;
+    process.exit(exitCode);
+  }
+
+  TRACE`Running in stdin mode, reading input`;
   // Read JSON input from stdin
   let stdinData = '';
   for await (const chunk of process.stdin) {
     stdinData += chunk;
   }
+  TRACE`Read ${stdinData.length} bytes from stdin`;
 
   if (!stdinData.trim()) {
     emitEvent({ type: 'log', message: 'Error: No input provided on stdin' });
@@ -33,6 +84,7 @@ async function main() {
   try {
     const rawInput = JSON.parse(stdinData);
     input = CliInputSchema.parse(rawInput);
+    TRACE`Parsed input: mode=${input.mode}, mcpUrl=${input.mcpUrl}`;
   } catch (error) {
     emitEvent({ type: 'log', message: `Error: Invalid stdin input: ${error}` });
     process.exit(1);
@@ -42,10 +94,12 @@ async function main() {
   const prompt = input.mode === 'investigate'
     ? Mustache.render(INVESTIGATE_PROMPT_TEMPLATE, input)
     : Mustache.render(IMPLEMENT_PROMPT_TEMPLATE, input);
+  TRACE`Rendered prompt, length: ${prompt.length}`;
 
   const { mcpUrl } = input;
 
   emitEvent({ type: 'log', message: `Connecting to MCP server at ${mcpUrl}...` });
+  TRACE`Calling query() with mcpUrl: ${mcpUrl}`;
 
   try {
     const result = query({
@@ -66,11 +120,13 @@ async function main() {
         // No tool restrictions - agent has full access to investigate
       },
     });
+    TRACE`query() call initiated, starting message loop`;
 
     let turnNumber = 0;
     const toolCalls = new Map<string, string>();
 
     for await (const message of result) {
+      TRACE`Received message type: ${message.type}`;
       if (message.type === 'assistant') {
         turnNumber++;
         emitEvent({

@@ -1,6 +1,6 @@
 import { z, type ZodRawShape, type ZodTypeAny } from 'zod';
-import type { StatusMessage, Summary } from 'klendathu-cli/types';
-import { StatusMessageSchema } from 'klendathu-cli/types';
+import type { StatusMessage, Summary } from 'klendathu-utils/types';
+import { StatusMessageSchema } from 'klendathu-utils/types';
 
 export type { StatusMessage, Summary };
 export { StatusMessageSchema };
