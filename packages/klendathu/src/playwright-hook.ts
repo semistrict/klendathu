@@ -78,11 +78,11 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
   let patchedStep: any = null;
   let patchedExtend: any = null;
 
-  const wrappedTest = new Proxy(originalTest, {
+  const handler: ProxyHandler<any> = {
     // Intercept function calls to the test
     apply(target, thisArg, args) {
       const [title, testFn] = args;
-      TRACE`Instrumented Playwright test: "${title}" (Proxy apply)`;
+      TRACE`Proxy apply trap called for test: "${title}"`;
 
       // Extend timeout before test runs
       if (typeof target.setTimeout === 'function') {
@@ -207,8 +207,23 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
 
       // Return original property
       return target[prop];
+    },
+
+    // Ensure the Proxy is transparent for property checks
+    has(target, prop) {
+      return prop in target;
+    },
+
+    getOwnPropertyDescriptor(target, prop) {
+      return Object.getOwnPropertyDescriptor(target, prop);
+    },
+
+    ownKeys(target) {
+      return Reflect.ownKeys(target);
     }
-  });
+  };
+
+  const wrappedTest = new Proxy(originalTest, handler);
 
   return wrappedTest;
 }
