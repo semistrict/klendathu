@@ -4,6 +4,8 @@
  */
 
 import { createRequire } from 'module';
+import { AsyncLocalStorage } from 'async_hooks';
+import type { Page, BrowserContext, Browser, APIRequestContext } from '@playwright/test';
 import { investigate } from './launcher.js';
 import { TRACE } from 'klendathu-utils/logging';
 
@@ -13,6 +15,16 @@ const Module = require('module');
 TRACE`Playwright hook loaded`;
 
 const KLENDATHU_PATCHED = Symbol('klendathu.patched');
+
+interface PlaywrightFixtures {
+  page: Page;
+  context: BrowserContext;
+  browser: Browser;
+  request: APIRequestContext;
+}
+
+// AsyncLocalStorage to hold fixtures accessible to step handlers
+const fixturesStorage = new AsyncLocalStorage<PlaywrightFixtures>();
 
 declare global {
   interface Function {
@@ -28,7 +40,7 @@ async function performInvestigation(
   error: Error,
   title: string,
   titleType: 'testTitle' | 'stepTitle',
-  fixtures: { page?: any; context?: any; browser?: any; request?: any }
+  fixtures: PlaywrightFixtures
 ): Promise<string> {
   const params: any = {
     error,
@@ -71,81 +83,40 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
       return originalTest.call(this, title, async function (this: any, { page, context, browser, request }: any, testInfo: any) {
         TRACE`Starting test execution: ${title}`;
 
-        // Patch wrappedTest.step to have access to fixtures via closure
-        const originalStepOnWrappedTest = (wrappedTest as any).step;
-        if (originalStepOnWrappedTest) {
-          const originalStepBound = originalStepOnWrappedTest.bind(wrappedTest);
-          (wrappedTest as any).step = async function<T>(
-            stepTitle: string,
-            body: () => Promise<T>,
-            options?: { box?: boolean }
-          ): Promise<T> {
-            TRACE`Starting test.step: ${stepTitle}`;
-            try {
-              const result = await originalStepBound(stepTitle, body, options);
-              TRACE`Test.step passed: ${stepTitle}`;
-              return result;
-            } catch (error) {
-              TRACE`Test.step failed: ${stepTitle}, error: ${error}`;
-              console.error(`\n🐛 Playwright step "${stepTitle}" failed, investigating...\n`);
+        // Store fixtures in ALS for access by step handlers
+        const fixtures: PlaywrightFixtures = { page, context, browser, request };
 
-              if (typeof testInfo.setTimeout === 'function') {
-                testInfo.setTimeout(300000);
-                TRACE`Set timeout to 300000ms for step: ${stepTitle}`;
-              }
-
-              try {
-                TRACE`Starting investigation for step: ${stepTitle}`;
-                const investigation = await performInvestigation(
-                  error instanceof Error ? error : new Error(String(error)),
-                  stepTitle,
-                  'stepTitle',
-                  { page, context, browser, request }
-                );
-
-                TRACE`Investigation completed for step: ${stepTitle}`;
-                console.error('\n📋 Klendathu Investigation:\n');
-                console.error(investigation);
-              } catch (err) {
-                TRACE`Investigation failed for step: ${stepTitle}, error: ${err}`;
-                console.error('\n⚠️  Investigation failed:', err);
-              }
-
-              TRACE`Re-throwing original error for step: ${stepTitle}`;
-              throw error;
-            }
-          };
-        }
-
-        try {
-          // Call original test function with fixtures
-          const result = await testFn.call(this, { page, context, browser, request }, testInfo);
-          TRACE`Test passed: ${title}`;
-          return result;
-        } catch (error) {
-          TRACE`Test failed: ${title}, error: ${error}`;
-          console.error(`\n🐛 Playwright test "${title}" failed, investigating...\n`);
-
+        return fixturesStorage.run(fixtures, async () => {
           try {
-            TRACE`Starting investigation for test: ${title}`;
-            const investigation = await performInvestigation(
-              error instanceof Error ? error : new Error(String(error)),
-              title,
-              'testTitle',
-              { page, context, browser, request }
-            );
+            // Call original test function with fixtures
+            const result = await testFn.call(this, { page, context, browser, request }, testInfo);
+            TRACE`Test passed: ${title}`;
+            return result;
+          } catch (error) {
+            TRACE`Test failed: ${title}, error: ${error}`;
+            console.error(`\n🐛 Playwright test "${title}" failed, investigating...\n`);
 
-            TRACE`Investigation completed for test: ${title}`;
-            console.error('\n📋 Klendathu Investigation:\n');
-            console.error(investigation);
-          } catch (err) {
-            TRACE`Investigation failed for test: ${title}, error: ${err}`;
-            console.error('\n⚠️  Investigation failed:', err);
+            try {
+              TRACE`Starting investigation for test: ${title}`;
+              const investigation = await performInvestigation(
+                error instanceof Error ? error : new Error(String(error)),
+                title,
+                'testTitle',
+                fixtures
+              );
+
+              TRACE`Investigation completed for test: ${title}`;
+              console.error('\n📋 Klendathu Investigation:\n');
+              console.error(investigation);
+            } catch (err) {
+              TRACE`Investigation failed for test: ${title}, error: ${err}`;
+              console.error('\n⚠️  Investigation failed:', err);
+            }
+
+            TRACE`Re-throwing original error for test: ${title}`;
+            throw error;
           }
-
-          TRACE`Re-throwing original error for test: ${title}`;
-          throw error;
-        }
+        });
       });
     };
 
@@ -163,6 +134,54 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
         // Recursively wrap the extended test
         return wrapTestObject(extendedTest, moduleName);
       };
+    }
+
+    // Patch test.step to use ALS for fixtures
+    if (typeof (wrappedTest as any).step === 'function') {
+      const originalStep = (wrappedTest as any).step.bind(wrappedTest);
+
+      (wrappedTest as any).step = async function<T>(
+        stepTitle: string,
+        body: () => Promise<T>,
+        options?: { box?: boolean }
+      ): Promise<T> {
+        TRACE`Starting test.step: ${stepTitle}`;
+        try {
+          const result = await originalStep(stepTitle, body, options);
+          TRACE`Test.step passed: ${stepTitle}`;
+          return result;
+        } catch (error) {
+          TRACE`Test.step failed: ${stepTitle}, error: ${error}`;
+          console.error(`\n🐛 Playwright step "${stepTitle}" failed, investigating...\n`);
+
+          try {
+            TRACE`Starting investigation for step: ${stepTitle}`;
+            const fixtures = fixturesStorage.getStore();
+            if (!fixtures) {
+              throw new Error('Fixtures not available in AsyncLocalStorage');
+            }
+
+            const investigation = await performInvestigation(
+              error instanceof Error ? error : new Error(String(error)),
+              stepTitle,
+              'stepTitle',
+              fixtures
+            );
+
+            TRACE`Investigation completed for step: ${stepTitle}`;
+            console.error('\n📋 Klendathu Investigation:\n');
+            console.error(investigation);
+          } catch (err) {
+            TRACE`Investigation failed for step: ${stepTitle}, error: ${err}`;
+            console.error('\n⚠️  Investigation failed:', err);
+          }
+
+          TRACE`Re-throwing original error for step: ${stepTitle}`;
+          throw error;
+        }
+      };
+
+      (wrappedTest as any).step[KLENDATHU_PATCHED] = true;
     }
 
   return wrappedTest;
