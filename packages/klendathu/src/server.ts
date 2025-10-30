@@ -24,6 +24,8 @@ export async function createMcpServer<Schema extends ZodRawShape = ZodRawShape>(
   // Shared state for set_result tool
   let resultValue: unknown = undefined;
   let resultWasSet = false;
+  let implementationFailed = false;
+  let failureReason = '';
 
   // Create a factory function that returns the server with eval tool
   const getServer = () => {
@@ -195,6 +197,32 @@ export async function createMcpServer<Schema extends ZodRawShape = ZodRawShape>(
           }
         }
       );
+
+      server.registerTool(
+        'fail_implementation',
+        {
+          description:
+            'Call this tool if you cannot fulfill the implementation request. ' +
+            'Provide a clear reason explaining why the implementation cannot be completed. ' +
+            'This will raise an exception with your reason, allowing the caller to handle the failure gracefully.',
+          inputSchema: {
+            reason: z.string().describe('Clear explanation of why the implementation cannot be completed'),
+          },
+        },
+        async ({ reason }) => {
+          implementationFailed = true;
+          failureReason = reason;
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Implementation failure recorded: ${reason}`,
+              },
+            ],
+          };
+        }
+      );
     }
 
     return server;
@@ -268,6 +296,9 @@ export async function createMcpServer<Schema extends ZodRawShape = ZodRawShape>(
   // Add getResult if in implement mode
   if ('schema' in context && context.schema) {
     instance.getResult = () => {
+      if (implementationFailed) {
+        throw new Error(`Implementation failed: ${failureReason}`);
+      }
       if (!resultWasSet) {
         throw new Error('Result was not set by agent');
       }

@@ -176,4 +176,26 @@ describe('implement() end-to-end', () => {
 
     expect(result.sorted).toEqual([90, 64, 34, 25, 22, 12, 11]);
   }, 60000);
+
+  it('should report failure via fail_implementation tool', async () => {
+    const failureSchema = {
+      status: z.string(),
+    };
+
+    const impossibleContext = {
+      // No data to work with
+    };
+
+    try {
+      await implement(
+        `You cannot complete this task because no data has been provided. Call the fail_implementation tool to report this.`,
+        impossibleContext,
+        failureSchema
+      );
+      // If we get here, the test should fail
+      expect(true).toBe(false);
+    } catch (error: any) {
+      expect(error.message).toContain('Implementation failed');
+    }
+  }, 60000);
 });
