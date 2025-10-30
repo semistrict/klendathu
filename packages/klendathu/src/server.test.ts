@@ -203,4 +203,48 @@ describe('MCP Server', () => {
     expect(((result.content as any[])[0] as any).text).toContain('Error during eval');
     expect(((result.content as any[])[0] as any).text).toContain('Eval error');
   });
+
+  it('should have fail_implementation tool in implement mode', async () => {
+    const context: any = {
+      context: { test: 'value' },
+      contextDescriptions: {},
+      timestamp: new Date().toISOString(),
+      pid: process.pid,
+      schema: { result: { _type: 'ZodString' } },
+    };
+
+    const { client } = await setupMcpClient(context);
+
+    const result = await client.listTools();
+
+    const failTool = result.tools.find((t) => t.name === 'fail_implementation');
+    expect(failTool).toBeDefined();
+    expect(failTool!.name).toBe('fail_implementation');
+    expect(failTool!.description).toContain('cannot fulfill');
+  });
+
+  it('should call fail_implementation tool and record failure', async () => {
+    const context: any = {
+      context: { test: 'value' },
+      contextDescriptions: {},
+      timestamp: new Date().toISOString(),
+      pid: process.pid,
+      schema: { result: { _type: 'ZodString' } },
+    };
+
+    const { server, client } = await setupMcpClient(context);
+
+    const result = await client.callTool({
+      name: 'fail_implementation',
+      arguments: {
+        reason: 'Cannot generate data without required fields',
+      },
+    });
+
+    expect(result.content).toBeDefined();
+    expect(((result.content as any[])[0] as any).text).toContain('Implementation failure recorded');
+
+    // Verify getResult throws the failure reason
+    expect(() => server.getResult?.()).toThrow('Implementation failed: Cannot generate data without required fields');
+  });
 });

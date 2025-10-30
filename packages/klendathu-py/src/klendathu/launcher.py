@@ -7,11 +7,13 @@ import sys
 import traceback
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional, Union, AsyncIterator, Type
+from typing import Any, Optional, Union, AsyncIterator, Type, TypeVar
 from types import TracebackType
 
 from .server import create_mcp_server
 from .types import StatusMessage, Summary, StackFrame, ContextItemType, DebugContext, ImplementContext
+
+T = TypeVar('T')
 
 
 class ContextItem:
@@ -229,6 +231,7 @@ async def run_agent(
     cli_path: Optional[str] = None,
     prompt: Optional[str] = None,
     schema: Optional[dict[str, Any]] = None,
+    on_stderr: Optional[callable] = None,
 ) -> tuple[int, str, list[StatusMessage]]:
     """
     Runs the agent CLI with structured input
@@ -269,22 +272,11 @@ async def run_agent(
         stderr=asyncio.subprocess.PIPE,
     )
 
-    # Send input to stdin
-    if process.stdin:
-        process.stdin.write(stdin_data.encode())
-        process.stdin.close()
+    # Use communicate() to avoid deadlock
+    stdout_bytes, stderr_bytes = await process.communicate(stdin_data.encode())
 
-    # Read stdout and stderr
-    stdout_task = asyncio.create_task(process.stdout.read() if process.stdout else asyncio.sleep(0))
-    stderr_task = asyncio.create_task(process.stderr.read() if process.stderr else asyncio.sleep(0))
-
-    stdout_bytes, stderr_bytes = await asyncio.gather(stdout_task, stderr_task)
-
-    # Wait for process to finish
-    await process.wait()
-
-    stdout = stdout_bytes.decode() if isinstance(stdout_bytes, bytes) else ""
-    stderr = stderr_bytes.decode() if isinstance(stderr_bytes, bytes) else ""
+    stdout = stdout_bytes.decode() if stdout_bytes else ""
+    stderr = stderr_bytes.decode() if stderr_bytes else ""
 
     # Parse stderr messages
     stderr_messages: list[StatusMessage] = []
@@ -295,9 +287,22 @@ async def run_agent(
         try:
             message = json.loads(line)
             stderr_messages.append(message)  # type: ignore
+
+            # Log the message
+            if message.get("type") == "log":
+                print(f"[CLI] {message.get('message', '')}")
+            elif message.get("type") == "tool_call":
+                print(f"[Tool Call] {message.get('name', '')}")
+            elif message.get("type") == "turn":
+                print(f"[Turn {message.get('turnNumber', '?')}] completed")
+
+            # Call callback if provided
+            if on_stderr:
+                on_stderr(message)
+
         except json.JSONDecodeError:
-            # Skip malformed lines
-            pass
+            # Not JSON, just log it
+            print(f"[CLI stderr] {line}")
 
     return process.returncode or 0, stdout, stderr_messages
 
@@ -401,15 +406,15 @@ def investigate(
     return promise
 
 
-def implement(
+async def implement(
     prompt: str,
     context: dict[str, Union[Any, ContextItem]],
-    model: Type[Any],
+    model: Type[T],
     extra_instructions: Optional[str] = None,
     cli_path: Optional[str] = None,
     port: int = 0,
     host: str = "localhost",
-) -> Any:
+) -> T:
     """
     Implements functionality using Claude AI with structured output
 
@@ -443,60 +448,60 @@ def implement(
         print(user)  # {'name': 'Alice', 'age': 30, 'email': 'alice@example.com'}
         ```
     """
+    print(f"[DEBUG] implement() called with prompt: {prompt[:50]}...")
+    # Build context
+    context_vars, context_items = build_context(context)
 
-    async def _run() -> Any:
-        # Build context
-        context_vars, context_items = build_context(context)
+    # Extract call stack
+    call_stack = extract_call_stack(None, 2)
 
-        # Extract call stack
-        call_stack = extract_call_stack(None, 2)
+    timestamp = datetime.utcnow().isoformat() + "Z"
+    pid = os.getpid()
 
-        timestamp = datetime.utcnow().isoformat() + "Z"
-        pid = os.getpid()
+    implement_context: ImplementContext = {
+        "context": context_vars,
+        "contextDescriptions": {},
+        "timestamp": timestamp,
+        "pid": pid,
+        "model": model,
+    }
 
-        implement_context: ImplementContext = {
-            "context": context_vars,
-            "contextDescriptions": {},
-            "timestamp": timestamp,
-            "pid": pid,
-            "model": model,
-        }
+    # Start MCP server with model
+    print(f"[DEBUG] Starting MCP server...")
+    mcp_server = await create_mcp_server(implement_context, port, host)
+    print(f"[DEBUG] MCP server started at {mcp_server.url}")
 
-        # Start MCP server with model
-        mcp_server = await create_mcp_server(implement_context, port, host)
+    # Serialize model schema to JSON (simplified)
+    schema_json = {}
+    if hasattr(model, "model_json_schema"):
+        schema_json = model.model_json_schema()
 
-        # Serialize model schema to JSON (simplified)
-        schema_json = {}
-        if hasattr(model, "model_json_schema"):
-            schema_json = model.model_json_schema()
+    # Run the agent
+    print(f"[DEBUG] Running agent CLI...")
+    exit_code, stdout, stderr_messages = await run_agent(
+        mode="implement",
+        mcp_url=mcp_server.url,
+        call_stack=call_stack,
+        context=context_items,
+        timestamp=timestamp,
+        pid=pid,
+        extra_instructions=extra_instructions,
+        cli_path=cli_path,
+        prompt=prompt,
+        schema=schema_json,
+    )
 
-        # Run the agent
-        exit_code, stdout, stderr_messages = await run_agent(
-            mode="implement",
-            mcp_url=mcp_server.url,
-            call_stack=call_stack,
-            context=context_items,
-            timestamp=timestamp,
-            pid=pid,
-            extra_instructions=extra_instructions,
-            cli_path=cli_path,
-            prompt=prompt,
-            schema=schema_json,
+    # Close server
+    await mcp_server.close()
+
+    if exit_code != 0:
+        raise RuntimeError(f"Implementation failed with exit code {exit_code}")
+
+    # Get the result from the server
+    try:
+        result = mcp_server.get_result()
+        return result
+    except Exception as error:
+        raise RuntimeError(
+            f"Agent did not call set_result tool. {str(error)}"
         )
-
-        # Close server
-        await mcp_server.close()
-
-        if exit_code != 0:
-            raise RuntimeError(f"Implementation failed with exit code {exit_code}")
-
-        # Get the result from the server
-        try:
-            result = mcp_server.get_result()
-            return result
-        except Exception as error:
-            raise RuntimeError(
-                f"Agent did not call set_result tool. {str(error)}"
-            )
-
-    return asyncio.create_task(_run())

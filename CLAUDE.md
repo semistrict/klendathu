@@ -252,3 +252,4 @@ Adding support for Go, Ruby, etc. follows the same pattern:
 2. Implement launcher that spawns `klendathu-cli` with structured JSON input
 3. Extract call stack using language-specific stack trace APIs
 4. Test with the same CLI (no CLI changes needed)
+- For Python always use uv
