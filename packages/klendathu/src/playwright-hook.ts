@@ -26,6 +26,9 @@ interface PlaywrightFixtures {
 // AsyncLocalStorage to hold fixtures accessible to step handlers
 const fixturesStorage = new AsyncLocalStorage<PlaywrightFixtures>();
 
+// Global fallback: store current fixtures for this worker process
+let currentFixtures: PlaywrightFixtures | null = null;
+
 declare global {
   interface Function {
     [KLENDATHU_PATCHED]?: boolean;
@@ -91,9 +94,10 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
     return originalTestFn(title, async function (this: any, { page, context, browser, request }: any, testInfo: any) {
       TRACE`Starting test execution: ${title}`;
 
-      // Store fixtures in ALS for access by step handlers
+      // Store fixtures in ALS and global for access by step handlers
       const fixtures: PlaywrightFixtures = { page, context, browser, request };
-      TRACE`Storing fixtures in ALS for test: ${title}`;
+      TRACE`Storing fixtures in ALS and global for test: ${title}`;
+      currentFixtures = fixtures;
 
       return fixturesStorage.run(fixtures, async () => {
         TRACE`Inside ALS.run for test: ${title}`;
@@ -134,49 +138,8 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
   // Copy all properties from original test to wrapped function
   Object.assign(wrappedTestFn, originalTest);
 
-  // Patch step
-  const originalStep = originalTest.step.bind(wrappedTestFn);
-  wrappedTestFn.step = async function<T>(
-    stepTitle: string,
-    body: () => Promise<T>,
-    options?: { box?: boolean }
-  ): Promise<T> {
-    TRACE`Starting test.step: ${stepTitle}`;
-    try {
-      const result = await originalStep(stepTitle, body, options);
-      TRACE`Test.step passed: ${stepTitle}`;
-      return result;
-    } catch (error) {
-      TRACE`Test.step failed: ${stepTitle}, error: ${error}`;
-      console.error(`\n🐛 Playwright step "${stepTitle}" failed, investigating...\n`);
-
-      try {
-        TRACE`Starting investigation for step: ${stepTitle}`;
-        const fixtures = fixturesStorage.getStore();
-        TRACE`Retrieved fixtures from ALS: ${fixtures ? 'found' : 'NOT FOUND'}`;
-        if (!fixtures) {
-          throw new Error('Fixtures not available in AsyncLocalStorage');
-        }
-
-        const investigation = await performInvestigation(
-          error instanceof Error ? error : new Error(String(error)),
-          stepTitle,
-          'stepTitle',
-          fixtures
-        );
-
-        TRACE`Investigation completed for step: ${stepTitle}`;
-        console.error('\n📋 Klendathu Investigation:\n');
-        console.error(investigation);
-      } catch (err) {
-        TRACE`Investigation failed for step: ${stepTitle}, error: ${err}`;
-        console.error('\n⚠️  Investigation failed:', err);
-      }
-
-      TRACE`Re-throwing original error for step: ${stepTitle}`;
-      throw error;
-    }
-  };
+  // NOTE: We don't patch step here anymore - it's patched globally in Module._load
+  // This ensures ALL extends (including double extends) get the patched version
 
   // Patch extend
   const originalExtend = originalTest.extend.bind(wrappedTestFn);
@@ -192,6 +155,9 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
   return wrappedTestFn;
 }
 
+// Store reference to original test.step for ALL test objects
+let originalTestStep: any = null;
+
 // Monkey-patch Module._load to intercept @playwright/test
 const originalLoad = Module._load;
 
@@ -201,6 +167,63 @@ Module._load = function (request: string, parent: any, isMain: boolean) {
   // Check if this module has a test object
   if (module && module.test && !module.test[KLENDATHU_PATCHED]) {
     TRACE`Module._load intercepted module with test object: ${request}`;
+
+    // CRITICAL: Patch test.step DIRECTLY on the original module.test object
+    // This ensures ALL extends inherit the patched version
+    if (!originalTestStep && typeof module.test.step === 'function') {
+      originalTestStep = module.test.step;
+      TRACE`Stored original test.step function, now patching it globally`;
+
+      // Patch step directly on module.test so all extends inherit it
+      module.test.step = async function<T>(
+        stepTitle: string,
+        body: () => Promise<T>,
+        options?: { box?: boolean }
+      ): Promise<T> {
+        TRACE`Global patched test.step called: ${stepTitle}`;
+        try {
+          const result = await originalTestStep.call(this, stepTitle, body, options);
+          TRACE`Test.step passed: ${stepTitle}`;
+          return result;
+        } catch (error) {
+          TRACE`Test.step failed: ${stepTitle}, error: ${error}`;
+          console.error(`\n🐛 Playwright step "${stepTitle}" failed, investigating...\n`);
+
+          try {
+            TRACE`Starting investigation for step: ${stepTitle}`;
+            let fixtures = fixturesStorage.getStore();
+            TRACE`Retrieved fixtures from ALS: ${fixtures ? 'found' : 'NOT FOUND'}`;
+            if (!fixtures) {
+              TRACE`Falling back to global currentFixtures: ${currentFixtures ? 'found' : 'NOT FOUND'}`;
+              fixtures = currentFixtures || undefined;
+            }
+
+            if (!fixtures) {
+              throw new Error('Fixtures not available: test wrapper never executed');
+            }
+
+            const investigation = await performInvestigation(
+              error instanceof Error ? error : new Error(String(error)),
+              stepTitle,
+              'stepTitle',
+              fixtures
+            );
+
+            TRACE`Investigation completed for step: ${stepTitle}`;
+            console.error('\n📋 Klendathu Investigation:\n');
+            console.error(investigation);
+          } catch (err) {
+            TRACE`Investigation failed for step: ${stepTitle}, error: ${err}`;
+            console.error('\n⚠️  Investigation failed:', err);
+          }
+
+          TRACE`Re-throwing original error for step: ${stepTitle}`;
+          throw error;
+        }
+      };
+      TRACE`Global test.step patch applied`;
+    }
+
     const wrappedTest = wrapTestObject(module.test, request);
 
     // Wrap module in a Proxy to intercept test access
