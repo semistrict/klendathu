@@ -5,7 +5,7 @@ import type { DebugContext, LaunchOptions, DebuggerPromise, StderrMessage, Summa
 import { StderrMessageSchema } from './types.js';
 import { createMcpServer } from './server.js';
 
-function emitStderr(message: { type: string; [key: string]: any }) {
+function emitEvent(message: { type: string; [key: string]: any }) {
   console.error(JSON.stringify({ ...message, timestamp: new Date().toISOString() }));
 }
 
@@ -107,7 +107,7 @@ export function investigate(
     // Start MCP server
     const mcpServer = await createMcpServer(debugContext, options);
 
-    emitStderr({ type: 'server_started', url: mcpServer.url });
+    emitEvent({ type: 'server_started', url: mcpServer.url });
 
     // Find CLI path
     const cliPath = options.cliPath || findCliPath();
@@ -153,7 +153,7 @@ export function investigate(
       prompt += `\n\n<additional_instructions>\n${options.extraInstructions}\n</additional_instructions>`;
     }
 
-    emitStderr({ type: 'log', message: `Launching debugger: node ${cliPath}` });
+    emitEvent({ type: 'log', message: `Launching debugger: node ${cliPath}` });
 
     // Spawn the CLI with Node.js (no args, all data via stdin)
     const child = spawn('node', [cliPath], {

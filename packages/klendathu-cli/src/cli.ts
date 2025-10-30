@@ -9,7 +9,7 @@
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
-function emitStderr(message: any) {
+function emitEvent(message: any) {
   console.error(JSON.stringify({ ...message, timestamp: new Date().toISOString() }));
 }
 
@@ -21,7 +21,7 @@ async function main() {
   }
 
   if (!stdinData.trim()) {
-    emitStderr({ type: 'log', message: 'Error: No input provided on stdin' });
+    emitEvent({ type: 'log', message: 'Error: No input provided on stdin' });
     process.exit(1);
   }
 
@@ -33,13 +33,13 @@ async function main() {
       throw new Error('Missing required fields: mcpUrl and prompt');
     }
   } catch (error) {
-    emitStderr({ type: 'log', message: `Error: Invalid stdin input: ${error}` });
+    emitEvent({ type: 'log', message: `Error: Invalid stdin input: ${error}` });
     process.exit(1);
   }
 
   const { mcpUrl, prompt } = input;
 
-  emitStderr({ type: 'log', message: `Connecting to MCP server at ${mcpUrl}...` });
+  emitEvent({ type: 'log', message: `Connecting to MCP server at ${mcpUrl}...` });
 
   try {
     const result = query({
@@ -67,7 +67,7 @@ async function main() {
     for await (const message of result) {
       if (message.type === 'assistant') {
         turnNumber++;
-        emitStderr({
+        emitEvent({
           type: 'turn',
           turnNumber,
           stopReason: message.message.stop_reason || undefined,
@@ -79,7 +79,7 @@ async function main() {
             console.log(block.text);
           } else if (block.type === 'tool_use') {
             toolCalls.set(block.id, block.name);
-            emitStderr({
+            emitEvent({
               type: 'tool_call',
               toolName: block.name,
               input: block.input,
@@ -98,7 +98,7 @@ async function main() {
                 break;
               }
             }
-            emitStderr({
+            emitEvent({
               type: 'tool_result',
               toolName,
               resultPreview,
@@ -111,24 +111,24 @@ async function main() {
           console.log(message.result);
 
           // Emit summary as the last stderr message
-          emitStderr({
+          emitEvent({
             type: 'summary',
             cost: message.total_cost_usd,
             turns: message.num_turns,
           });
         } else {
-          emitStderr({ type: 'log', message: `Error: ${message.subtype}` });
+          emitEvent({ type: 'log', message: `Error: ${message.subtype}` });
           process.exit(1);
         }
       }
     }
   } catch (error) {
-    emitStderr({ type: 'log', message: `Failed to connect: ${error}` });
+    emitEvent({ type: 'log', message: `Failed to connect: ${error}` });
     process.exit(1);
   }
 }
 
 main().catch((error) => {
-  emitStderr({ type: 'log', message: `Fatal error: ${error}` });
+  emitEvent({ type: 'log', message: `Fatal error: ${error}` });
   process.exit(1);
 });
