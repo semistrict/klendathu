@@ -129,7 +129,7 @@ The Python implementation that provides the same functionality for Python applic
   - Uses Python's `traceback` module for call stack extraction
   - Uses `eval()` instead of `vm.runInContext()`
   - Uses `aiohttp` for HTTP server instead of Express
-  - Compatible with Python 3.9+
+  - Compatible with Python 3.10+ (required by MCP SDK)
 
 ## Key Design Patterns
 

@@ -75,7 +75,7 @@ Investigates an error using Claude AI.
 
 ## Requirements
 
-- Python 3.9+
+- Python 3.10+
 - Node.js (for klendathu-cli)
 - ANTHROPIC_API_KEY environment variable
 
