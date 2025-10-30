@@ -64,29 +64,15 @@ The AI will have access to an `eval` tool that can execute code with:
 - All context variables you passed (error, data, userId in this example)
 - All Node.js globals (console, process, Buffer, etc.)
 
-## Configuration
+## Authentication
 
-Configure which AI provider and model to use via environment variables or config file:
+Set your Anthropic API key:
 
 ```bash
-# Using OpenAI
-export KLENDATHU_PROVIDER=openai
-export KLENDATHU_MODEL=gpt-5
-export OPENAI_API_KEY=sk-...
-
-# Using Anthropic
-export KLENDATHU_PROVIDER=anthropic
-export KLENDATHU_MODEL=claude-3-5-sonnet-20241022
-export ANTHROPIC_API_KEY=sk-...
-
-# Or use a config file: .klendathu.json
-{
-  "provider": "openai",
-  "model": "gpt-5"
-}
+export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-See [CLAUDE.md](CLAUDE.md) for all supported providers.
+Get your API key from the [Anthropic Console](https://console.anthropic.com/).
 
 ## Example Debugging Session
 

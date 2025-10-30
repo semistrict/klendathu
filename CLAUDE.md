@@ -20,8 +20,8 @@ pnpm build
 pnpm test
 
 # Run a single test file
-cd packages/klendathu && pnpm test src/launcher.test.ts
-cd packages/e2e-test && pnpm test src/debugger.test.ts
+cd packages/klendathu && pnpm test launcher.test
+cd packages/e2e-test && pnpm test debugger.test
 
 # Watch mode for development
 pnpm dev
@@ -42,7 +42,7 @@ The main library that users import. Key files:
   - Accepts a context object with error and variables
   - Starts an HTTP MCP server with the debug context
   - Spawns the CLI as a child process
-  - Pipes a dynamically generated prompt to the CLI via stdin
+  - Pipes structured JSON input to the CLI via stdin (mcpUrl, callStack, context, etc.)
   - Returns a Promise that resolves to Claude's investigation text
   - Provides `stderr` async iterator for structured progress messages
   - Provides `summary` Promise for cost/turn statistics
@@ -60,29 +60,29 @@ The main library that users import. Key files:
 
 ### 2. CLI (`packages/klendathu-cli`)
 
-A single-file bundled executable (via Vite):
+A bundled executable (via Vite):
 
 - **`cli.ts`**:
-  - Reads MCP server URL from command line args
-  - Reads investigation prompt from stdin
-  - Connects to the MCP server using AI SDK 6 (`experimental_createMCPClient`)
-  - Uses `Experimental_Agent` with configurable provider (defaults to Claude Code)
+  - Reads structured JSON input from stdin containing:
+    - `mode`: 'investigate' or 'implement'
+    - `mcpUrl`: HTTP MCP server URL
+    - `callStack`: Array of stack frames
+    - `context`: Array of context items with names/types/descriptions
+    - `timestamp`, `pid`, `extraInstructions`
+  - Renders prompt from template using Mustache
+  - Uses `@anthropic-ai/claude-agent-sdk` `query()` function
+  - Connects to MCP server with Claude Code preset (`systemPrompt: { type: 'preset', preset: 'claude_code' }`)
+  - Permission mode: `bypassPermissions` (auto-accepts all operations)
   - Emits structured JSON to stderr for progress tracking
   - Outputs final investigation result to stdout
-  - Note: Claude Code provider uses built-in tools (Read, Grep, Bash) which bypass MCP tool tracking
 
-- **`config.ts`**: Configuration loader
-  - Reads from `.klendathu.json` (global: `~/.klendathu.json`, local: `./.klendathu.json`)
-  - Environment variable overrides: `KLENDATHU_PROVIDER`, `KLENDATHU_MODEL`
-  - Schema: `{ provider: string, model?: string, options?: Record<string, unknown> }`
-  - Priority: env vars > local config > global config > defaults
-  - Default provider: `claude-code`
+- **`types.ts`**: Input/output schemas
+  - `CliInputSchema`: Discriminated union of InvestigateInput and ImplementInput
+  - `StatusMessageSchema`: All stderr messages (log, server_started, turn, tool_call, tool_result, summary)
 
-- **`providers.ts`**: Provider factory
-  - Maps config to AI SDK 6 provider instances using `createAnthropic()`, `createOpenAI()`, etc.
-  - Supported providers: anthropic, openai, azure, google, google-vertex, mistral, groq, amazon-bedrock, cohere, xai, claude-code
-  - Each provider uses factory functions that accept options (apiKey, baseURL, headers, etc.)
-  - API keys loaded from environment: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.
+- **`strings.ts`**: Mustache prompt templates
+  - `INVESTIGATE_PROMPT_TEMPLATE`: Instructions for investigating errors
+  - `IMPLEMENT_PROMPT_TEMPLATE`: Instructions for implementing functionality
 
 ### 3. E2E Tests (`packages/e2e-test`)
 
@@ -91,8 +91,8 @@ A single-file bundled executable (via Vite):
   - Calls `investigate()` with error context
   - Spawns the actual server and CLI
   - Verifies the AI produces a useful investigation
-  - Uses Claude Code provider by default (requires `claude login`)
-  - Can test other providers via `test:openai`, `test:anthropic`, etc.
+  - Uses Claude Agent SDK (requires `ANTHROPIC_API_KEY`)
+  - Note: Claude Agent SDK doesn't provide token counts or finishReason - these fields are optional in the summary
 
 ## Key Design Patterns
 
@@ -120,17 +120,15 @@ All stderr output is JSON with a `type` discriminator:
 
 The launcher parses these and makes them available via the `stderr` async iterator.
 
-**Note on tool tracking:** The Claude Code provider uses its own built-in tools (Read, Grep, Bash, etc.) which don't appear as MCP tool calls in `result.steps`. Only calls to the MCP `eval` tool are tracked. Other providers (anthropic, openai, etc.) will show accurate MCP tool call tracking.
-
 ### Dynamic Prompt Generation
 
-The launcher generates a prompt that includes:
-- Error stack trace (if available)
-- List of available context variables with descriptions
-- Instructions for using the MCP eval tool
+The launcher sends structured JSON input to the CLI containing:
+- Call stack frames (file paths, line numbers, function names)
+- Context items (variable names, types, descriptions)
+- Timestamp and PID
 - User's `extraInstructions` if provided
 
-This prompt is sent to the AI agent via the CLI.
+The CLI renders this data into a prompt using Mustache templates from `strings.ts`.
 
 ### CLI Path Resolution
 
@@ -146,57 +144,40 @@ This is resolved relative to the launcher's import.meta.url.
   - Type-checking runs via `pnpm typecheck` (tsc --noEmit)
   - Vite bundles src/cli.ts into dist/cli.js with shebang using SSR mode
   - All Node.js built-in modules are externalized (via `builtinModules`)
-  - All AI SDK providers are installed as dependencies but externalized at build time
-  - Bundled external dependencies: `ai`, `@ai-sdk/mcp`, `@ai-sdk/anthropic`, `@ai-sdk/openai`, etc.
+  - Externalized dependencies: `@anthropic-ai/claude-agent-sdk`, `@modelcontextprotocol/sdk`
+  - Other dependencies (mustache, zod) are bundled
   - chmod +x is applied via build script
 - **Root pnpm test**: Runs `pnpm build` before tests to ensure everything is up-to-date
 
-## Configuration
+## Authentication
 
-Users can configure which AI provider and model to use:
+The CLI uses Claude Agent SDK which requires an API key:
 
-**Config file** (`.klendathu.json`):
-```json
-{
-  "provider": "anthropic",
-  "model": "MODEL_NAME_HERE",
-  "options": {
-    "apiKey": "optional-if-env-var-set"
-  }
-}
-```
-
-**Environment variables** (override config file):
 ```bash
-export KLENDATHU_PROVIDER=anthropic
-export KLENDATHU_MODEL=MODEL_NAME_HERE
-export ANTHROPIC_API_KEY=sk-...
+export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-**Supported providers** (all require explicit model specification except claude-code):
-- `anthropic` (env: `ANTHROPIC_API_KEY`)
-- `openai` (env: `OPENAI_API_KEY`)
-- `azure` (env: `AZURE_API_KEY`)
-- `google` (env: `GOOGLE_GENERATIVE_AI_API_KEY`)
-- `google-vertex` (env: Google Cloud credentials)
-- `mistral` (env: `MISTRAL_API_KEY`)
-- `groq` (env: `GROQ_API_KEY`)
-- `amazon-bedrock` (env: AWS credentials)
-- `cohere` (env: `COHERE_API_KEY`)
-- `xai` (env: `XAI_API_KEY`)
-- `claude-code` (auth: `claude login`, models: sonnet [default], opus)
-
-**Note:** Model names must be explicitly specified (except for claude-code which defaults to 'sonnet'). Refer to each provider's documentation for available models.
+Get your API key from the [Anthropic Console](https://console.anthropic.com/).
 
 ## Testing Philosophy
 
 - Unit tests in `packages/klendathu` for launcher and server logic
-- E2E tests can use any AI provider via `test:openai`, `test:anthropic`, `test:google`, `test:bedrock`
-- Default `pnpm test` uses Claude Code provider (requires `claude login`)
-- Other providers require API keys and explicit model names in environment variables
-- Tests use explicit assertions, not vague ones (see user's CLAUDE.md rules)
-- Summary metrics verified: turns, tokens (input/output/total), finishReason, toolCallsCount, warnings
+- E2E tests in `packages/e2e-test` use real Claude Agent SDK (requires `ANTHROPIC_API_KEY`)
+- Tests verify: turns, cost
+- Note: Claude Agent SDK doesn't provide token counts or finishReason (these are optional in Summary type)
 - Tests cost money and are slow (~20-40s) as they use real AI APIs
+- Test output written to `/tmp/klendathu-test-{timestamp}/` for debugging
+
+## Additional Features
+
+- **`implement.ts`**: Similar to `investigate()` but for AI-driven implementation
+  - Accepts a prompt and Zod schema
+  - Agent must call `set_result` tool with validated result
+  - Returns typed result matching the schema
+
+- **`playwright-hook.ts`**: Auto-investigation on Playwright test failures
+  - Import via `NODE_OPTIONS="--import=klendathu/playwright-hook"`
+  - Intercepts test failures and spawns investigation automatically
 
 ## Future: Multi-Language Support
 
