@@ -45,3 +45,5 @@ jobs:
 
       - name: Test
         run: pnpm -r test
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
