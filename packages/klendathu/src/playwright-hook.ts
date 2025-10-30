@@ -136,10 +136,13 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
   };
 
   // Copy all properties from original test to wrapped function
+  // BUT preserve the globally patched step function
+  const globallyPatchedStep = originalTest.step;
   Object.assign(wrappedTestFn, originalTest);
+  wrappedTestFn.step = globallyPatchedStep; // Restore the patched version
 
-  // NOTE: We don't patch step here anymore - it's patched globally in Module._load
-  // This ensures ALL extends (including double extends) get the patched version
+  // NOTE: step is patched globally in Module._load before this function runs
+  // We must preserve that patch even after Object.assign
 
   // Patch extend
   const originalExtend = originalTest.extend.bind(wrappedTestFn);
