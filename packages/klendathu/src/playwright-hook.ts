@@ -71,9 +71,14 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
     return originalTest;
   }
 
+  TRACE`wrapTestObject called for module: ${moduleName}`;
+
+  // Store the original test function implementation
+  const originalTestImpl = originalTest;
+
   // Create wrapped test function
   const wrappedTest = function (this: any, title: string, testFn: any) {
-      TRACE`Instrumented Playwright test: "${title}"`;
+      TRACE`Instrumented Playwright test: "${title}" (wrappedTest called)`;
       // Extend timeout before test runs
       if (typeof originalTest.setTimeout === 'function') {
         originalTest.setTimeout(300000);
@@ -179,7 +184,7 @@ function wrapTestObject(originalTest: any, moduleName: string): any {
 
     // Intercept .extend() to wrap extended test objects (MUST be after Object.assign!)
     if (typeof originalTest.extend === 'function') {
-      const originalExtend = originalTest.extend.bind(originalTest);
+      const originalExtend = originalTest.extend.bind(wrappedTest);  // Bind to wrappedTest, not originalTest!
       wrappedTest.extend = function(fixtures: any) {
         TRACE`test.extend() called, wrapping extended test object`;
         const extendedTest = originalExtend(fixtures);

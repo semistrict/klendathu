@@ -21,7 +21,7 @@ describe('playwright-hook', () => {
     }>((resolve) => {
       const proc = spawn(
         klendathuCli,
-        ['npx', 'playwright', 'test', 'playwright-hook-target.test.ts', '--grep', 'should find random number'],
+        ['npx', 'playwright', 'test', 'playwright-hook-target.test.ts', '--grep', 'should find random number|multiple extends'],
         {
           cwd: testAppDir,
           env: {

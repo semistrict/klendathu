@@ -92,4 +92,26 @@ test.describe('Test App', () => {
       expect(text).toBe(`Random: ${randomNum + 1}`);
     });
   });
+
+  test('multiple extends should preserve ALS context', async ({ page }) => {
+    if (!process.env.TEST_RANDOM_NUMBER) {
+      throw new Error('TEST_RANDOM_NUMBER environment variable must be set');
+    }
+    const randomNum = parseInt(process.env.TEST_RANDOM_NUMBER, 10);
+
+    await test.step('first step - inject value', async () => {
+      await page.evaluate((num) => {
+        const div = document.createElement('div');
+        div.id = 'multi-extend-value';
+        div.textContent = `Value: ${num}`;
+        document.body.appendChild(div);
+      }, randomNum);
+    });
+
+    await test.step('second step - verify (will fail)', async () => {
+      const text = await page.textContent('#multi-extend-value');
+      // Intentionally wrong to trigger investigation
+      expect(text).toBe(`Value: ${randomNum + 999}`);
+    });
+  });
 });
