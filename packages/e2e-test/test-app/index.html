@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Test App</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    button { margin: 10px; padding: 10px 20px; }
+    #output { margin-top: 20px; padding: 10px; border: 1px solid #ccc; }
+  </style>
+</head>
+<body>
+  <h1>Test Application</h1>
+
+  <button id="increment">Increment Counter</button>
+  <button id="fetch-data">Fetch User Data</button>
+  <button id="calculate">Calculate Result</button>
+  <button id="submit-form">Submit Form</button>
+
+  <div id="output">
+    <div>Counter: <span id="counter">0</span></div>
+    <div id="user-info"></div>
+    <div id="calculation-result"></div>
+  </div>
+
+  <!-- Hidden form that appears after clicking submit -->
+  <form id="registration-form" style="display: none;">
+    <input type="text" id="username" placeholder="Username" />
+    <input type="email" id="email-input" placeholder="Email" />
+    <button type="submit">Register</button>
+    <div id="form-status"></div>
+  </form>
+
+  <script src="app.js"></script>
+</body>
+</html>

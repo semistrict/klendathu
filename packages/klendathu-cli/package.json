@@ -13,21 +13,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@ai-sdk/amazon-bedrock": "4.0.0-beta.44",
-    "@ai-sdk/anthropic": "3.0.0-beta.40",
-    "@ai-sdk/azure": "3.0.0-beta.38",
-    "@ai-sdk/cohere": "3.0.0-beta.23",
-    "@ai-sdk/google": "3.0.0-beta.30",
-    "@ai-sdk/google-vertex": "4.0.0-beta.48",
-    "@ai-sdk/groq": "3.0.0-beta.23",
-    "@ai-sdk/mcp": "1.0.0-beta.2",
-    "@ai-sdk/mistral": "3.0.0-beta.24",
-    "@ai-sdk/openai": "3.0.0-beta.38",
-    "@ai-sdk/xai": "3.0.0-beta.26",
-    "@modelcontextprotocol/sdk": "^1.20.2",
-    "ai": "6.0.0-beta.75",
-    "ai-sdk-provider-claude-code": "^2.1.0",
-    "zod": "^3.25.76"
+    "@anthropic-ai/claude-agent-sdk": "^0.1.27",
+    "@modelcontextprotocol/sdk": "^1.20.2"
   },
   "devDependencies": {
     "@types/node": "^22.18.12",

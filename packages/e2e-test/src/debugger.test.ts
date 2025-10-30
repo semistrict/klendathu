@@ -67,6 +67,7 @@ describe('klendathu end-to-end', () => {
     const summary = await promise.summary;
     console.log('=== Summary ===');
     console.log(`Turns: ${summary.turns}`);
+    console.log(`Cost: $${summary.cost}`);
     console.log(`Finish Reason: ${summary.finishReason}`);
     console.log(`Input Tokens: ${summary.inputTokens}`);
     console.log(`Output Tokens: ${summary.outputTokens}`);
@@ -83,9 +84,9 @@ describe('klendathu end-to-end', () => {
     }
 
     expect(summary.turns).toBeGreaterThan(0);
-    expect(summary.inputTokens).toBeGreaterThan(0);
-    expect(summary.outputTokens).toBeGreaterThan(0);
-    expect(summary.finishReason).toBe('stop');
+    expect(summary.cost).toBeGreaterThan(0);
+    // Claude Agent SDK doesn't provide token counts or finishReason
+    // These are only available when using AI SDK providers
 
     // Write all debugging info to files
     await writeFile(

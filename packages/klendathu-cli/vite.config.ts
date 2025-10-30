@@ -15,22 +15,9 @@ export default defineConfig({
         // All Node.js built-in modules
         ...builtinModules,
         ...builtinModules.map(m => `node:${m}`),
-        // AI SDK packages (will be in node_modules)
-        'ai',
-        '@ai-sdk/mcp',
-        'ai-sdk-provider-claude-code',
+        // Claude Agent SDK dependencies
+        '@anthropic-ai/claude-agent-sdk',
         '@modelcontextprotocol/sdk',
-        /^@ai-sdk\//,
-        'zod',
-        /^google-auth-library/,
-        /^gcp-metadata/,
-        /^@aws-sdk\//,
-        /^@anthropic-ai\//,
-        /^@azure\//,
-        /^@google-cloud\//,
-        /^@mistralai\//,
-        /^@cohere-ai\//,
-        /^groq-sdk/,
       ],
       output: {
         banner: '#!/usr/bin/env node',

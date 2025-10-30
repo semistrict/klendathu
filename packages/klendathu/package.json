@@ -9,6 +9,10 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./playwright-hook": {
+      "import": "./dist/playwright-hook.js",
+      "types": "./dist/playwright-hook.d.ts"
     }
   },
   "scripts": {
@@ -23,6 +27,7 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.20.2",
+    "@playwright/test": "^1.56.1",
     "@types/express": "^5.0.4",
     "@types/node": "^22.18.12",
     "typescript": "^5.9.3",
