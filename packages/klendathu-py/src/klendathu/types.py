@@ -1,7 +1,14 @@
 """Type definitions for klendathu"""
 
-from typing import Any, AsyncIterator, Protocol, TypedDict, Literal, Union
+from typing import Any, AsyncIterator, Protocol, TypedDict, Literal, Union, Type, TypeVar
 from datetime import datetime
+
+try:
+    from pydantic import BaseModel
+except ImportError:
+    BaseModel = None  # type: ignore
+
+T = TypeVar('T', bound='BaseModel')
 
 
 class StackFrame(TypedDict, total=False):
@@ -28,6 +35,16 @@ class DebugContext(TypedDict):
     contextDescriptions: dict[str, str]
     timestamp: str
     pid: int
+
+
+class ImplementContext(TypedDict):
+    """Context for implementation mode"""
+
+    context: dict[str, Any]
+    contextDescriptions: dict[str, str]
+    timestamp: str
+    pid: int
+    model: Type[Any]  # Pydantic model class
 
 
 class LogMessage(TypedDict):

@@ -101,18 +101,23 @@ A bundled executable (via Vite):
 
 The Python implementation that provides the same functionality for Python applications:
 
-- **`launcher.py`**: The `investigate()` function for Python:
-  - Accepts a context dict with error and variables
-  - Extracts call stack from Python exceptions (using traceback)
-  - Starts a Python MCP server with the debug context
-  - Spawns the same `klendathu-cli` (Node.js) as a subprocess
+- **`launcher.py`**: The `investigate()` and `implement()` functions for Python:
+  - `investigate()`: Investigates errors with AI
+    - Accepts a context dict with error and variables
+    - Extracts call stack from Python exceptions (using traceback)
+    - Returns a `DebuggerPromise` that resolves to Claude's investigation text
+    - Provides `stderr` async iterator for structured progress messages
+    - Provides `summary` property for cost/turn statistics
+  - `implement()`: AI-driven implementation with structured output
+    - Accepts a prompt, context, and Pydantic model for schema validation
+    - Returns validated result matching the model schema
+    - Agent must call `set_result` tool before finishing
+  - Both spawn the same `klendathu-cli` (Node.js) as a subprocess
   - Pipes structured JSON input to the CLI via stdin
-  - Returns a `DebuggerPromise` that resolves to Claude's investigation text
-  - Provides `stderr` async iterator for structured progress messages
-  - Provides `summary` property for cost/turn statistics
 
 - **`server.py`**: Creates a Python MCP debug server:
-  - Provides a single `eval` tool that executes Python code
+  - Provides `eval` tool that executes Python code
+  - Provides `set_result` tool for implement mode (validates against Pydantic model)
   - Uses Python's `eval()` with access to `context` (all user-provided variables)
   - Captures stdout/stderr output using `redirect_stdout` and `redirect_stderr`
   - Runs on a random HTTP port by default (using aiohttp)
@@ -120,6 +125,7 @@ The Python implementation that provides the same functionality for Python applic
 
 - **`types.py`**: Core type definitions:
   - `DebugContext`: The context object sent to the MCP server
+  - `ImplementContext`: Context for implement mode (includes Pydantic model)
   - `DebuggerPromise`: Protocol for Promise-like object with `stderr` and `summary` properties
   - `StatusMessage`: TypedDict for structured stderr messages
   - Uses TypedDict and Protocol for type hints

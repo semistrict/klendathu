@@ -89,3 +89,10 @@ def test_find_cli_path():
     cli_path = find_cli_path()
     assert "klendathu-cli" in cli_path
     assert cli_path.endswith("cli.js")
+
+
+def test_implement_import():
+    """Test that implement function can be imported"""
+    from klendathu.launcher import implement
+    assert implement is not None
+    assert callable(implement)

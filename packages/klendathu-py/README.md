@@ -30,6 +30,7 @@ except Exception as error:
 ## Features
 
 - **AI-Powered Debugging**: Uses Claude AI to analyze errors and suggest fixes
+- **AI Implementation**: Generate structured data using Pydantic models
 - **Context-Aware**: Provides the AI with your local variables and functions
 - **MCP Integration**: Uses Model Context Protocol for secure, sandboxed code execution
 - **Async Support**: Built with asyncio for modern Python applications
@@ -72,6 +73,42 @@ Investigates an error using Claude AI.
   - `await result`: Get the investigation text
   - `result.stderr`: Async iterator of status messages
   - `await result.summary`: Get statistics (turns, cost, tokens)
+
+### `implement(prompt, context, model, **options)`
+
+Implements functionality using Claude AI with structured output validated by a Pydantic model.
+
+**Parameters:**
+- `prompt` (str): Description of what to implement
+- `context` (dict): Context variables to make available
+- `model` (Type[BaseModel]): Pydantic model class for the expected result schema
+- `extra_instructions` (str, optional): Additional instructions for Claude
+- `cli_path` (str, optional): Path to the CLI executable
+- `port` (int, optional): Port for MCP server (0 for random)
+- `host` (str, optional): Host for MCP server
+
+**Returns:**
+- `Task`: Awaitable task that resolves to the validated result matching the Pydantic model schema
+
+**Example:**
+```python
+from klendathu import implement
+from pydantic import BaseModel
+
+class UserProfile(BaseModel):
+    name: str
+    age: int
+    email: str
+
+result = implement(
+    prompt="Create a user profile for a software engineer",
+    context={},
+    model=UserProfile
+)
+
+user = await result
+print(user)  # {'name': 'Alice', 'age': 30, 'email': 'alice@example.com'}
+```
 
 ## Requirements
 

@@ -24,14 +24,27 @@ class EvalInput(BaseModel):
 class McpServerInstance:
     """MCP server instance"""
 
-    def __init__(self, url: str, port: int, close_fn: Callable[[], None]):
+    def __init__(
+        self,
+        url: str,
+        port: int,
+        close_fn: Callable[[], None],
+        get_result_fn: Callable[[], Any] | None = None,
+    ):
         self.url = url
         self.port = port
         self._close_fn = close_fn
+        self._get_result_fn = get_result_fn
 
     async def close(self) -> None:
         """Close the server"""
         self._close_fn()
+
+    def get_result(self) -> Any:
+        """Get the result (for implement mode)"""
+        if self._get_result_fn is None:
+            raise RuntimeError("get_result not available (not in implement mode)")
+        return self._get_result_fn()
 
 
 async def create_mcp_server(
@@ -52,11 +65,16 @@ async def create_mcp_server(
 
     server = Server("klendathu")
     debug_context = context.get("context", {})
+    pydantic_model = context.get("model")  # For implement mode
+
+    # Shared state for set_result tool
+    result_value: Any = None
+    result_was_set = False
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
         """List available tools"""
-        return [
+        tools = [
             Tool(
                 name="eval",
                 description=(
@@ -78,58 +96,120 @@ async def create_mcp_server(
             )
         ]
 
+        # Add set_result tool if in implement mode
+        if pydantic_model is not None:
+            tools.append(
+                Tool(
+                    name="set_result",
+                    description=(
+                        "Sets the final result of the implementation by evaluating a function. "
+                        "This tool MUST be called with your completed implementation before finishing. "
+                        "The function should accept the context dict as a parameter and return the implementation result. "
+                        "The returned value will be validated against the expected Pydantic model schema."
+                    ),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "function": {
+                                "type": "string",
+                                "description": 'Function expression that takes context as parameter and returns the result, e.g., "lambda context: {\'result\': \'value\'}"',
+                            }
+                        },
+                        "required": ["function"],
+                    },
+                )
+            )
+
+        return tools
+
     @server.call_tool()
     async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         """Handle tool calls"""
-        if name != "eval":
-            raise ValueError(f"Unknown tool: {name}")
+        nonlocal result_value, result_was_set
 
-        fn_code = arguments.get("function", "")
-        try:
-            # Capture stdout and stderr
-            stdout_capture = StringIO()
-            stderr_capture = StringIO()
+        if name == "set_result":
+            # Handle set_result tool for implement mode
+            if pydantic_model is None:
+                return [TextContent(type="text", text="Error: set_result tool not available (not in implement mode)")]
 
-            # Create execution namespace with context
-            namespace = {
-                "context": debug_context,
-                "__builtins__": __builtins__,
-            }
+            fn_code = arguments.get("function", "")
+            try:
+                # Create execution namespace with context
+                namespace = {
+                    "context": debug_context,
+                    "__builtins__": __builtins__,
+                }
 
-            # Execute the function
-            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-                # Compile and execute the function
+                # Execute the function
                 fn = eval(fn_code, namespace)
                 if asyncio.iscoroutinefunction(fn):
-                    result = await fn()
+                    result = await fn(debug_context)
                 else:
-                    result = fn()
+                    result = fn(debug_context)
 
-            # Build output
-            output: dict[str, Any] = {"result": result}
+                # Validate result against Pydantic model
+                validated = pydantic_model(**result) if isinstance(result, dict) else pydantic_model(result)
+                result_value = validated.model_dump()
+                result_was_set = True
 
-            captured_stdout = stdout_capture.getvalue()
-            captured_stderr = stderr_capture.getvalue()
+                return [TextContent(type="text", text="Result set successfully and validated against schema.")]
 
-            console_logs = []
-            if captured_stdout:
-                console_logs.append({"level": "log", "args": [captured_stdout]})
-            if captured_stderr:
-                console_logs.append({"level": "error", "args": [captured_stderr]})
-
-            if console_logs:
-                output["console"] = console_logs
-
-            return [TextContent(type="text", text=json.dumps(output, indent=2, default=str))]
-
-        except Exception as e:
-            error_msg = f"Error during eval: {str(e)}"
-            if hasattr(e, "__traceback__"):
+            except Exception as e:
                 import traceback
+                error_msg = f"Error: {str(e)}\n\n{traceback.format_exc()}\n\nPlease fix the errors and call set_result again with a valid function."
+                return [TextContent(type="text", text=error_msg)]
 
-                error_msg += f"\n{traceback.format_exc()}"
+        elif name == "eval":
+            # Handle eval tool
+            fn_code = arguments.get("function", "")
+            try:
+                # Capture stdout and stderr
+                stdout_capture = StringIO()
+                stderr_capture = StringIO()
 
-            return [TextContent(type="text", text=error_msg)]
+                # Create execution namespace with context
+                namespace = {
+                    "context": debug_context,
+                    "__builtins__": __builtins__,
+                }
+
+                # Execute the function
+                with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                    # Compile and execute the function
+                    fn = eval(fn_code, namespace)
+                    if asyncio.iscoroutinefunction(fn):
+                        result = await fn()
+                    else:
+                        result = fn()
+
+                # Build output
+                output: dict[str, Any] = {"result": result}
+
+                captured_stdout = stdout_capture.getvalue()
+                captured_stderr = stderr_capture.getvalue()
+
+                console_logs = []
+                if captured_stdout:
+                    console_logs.append({"level": "log", "args": [captured_stdout]})
+                if captured_stderr:
+                    console_logs.append({"level": "error", "args": [captured_stderr]})
+
+                if console_logs:
+                    output["console"] = console_logs
+
+                return [TextContent(type="text", text=json.dumps(output, indent=2, default=str))]
+
+            except Exception as e:
+                error_msg = f"Error during eval: {str(e)}"
+                if hasattr(e, "__traceback__"):
+                    import traceback
+
+                    error_msg += f"\n{traceback.format_exc()}"
+
+                return [TextContent(type="text", text=error_msg)]
+
+        else:
+            raise ValueError(f"Unknown tool: {name}")
 
     # Create aiohttp app
     app = web.Application()
@@ -183,4 +263,13 @@ async def create_mcp_server(
         """Cleanup function"""
         asyncio.create_task(runner.cleanup())
 
-    return McpServerInstance(url=url, port=actual_port, close_fn=close_fn)
+    def get_result_fn() -> Any:
+        """Get the result (only for implement mode)"""
+        if not result_was_set:
+            raise RuntimeError("Result was not set by agent")
+        return result_value
+
+    # Only provide get_result if in implement mode
+    get_result = get_result_fn if pydantic_model is not None else None
+
+    return McpServerInstance(url=url, port=actual_port, close_fn=close_fn, get_result_fn=get_result)

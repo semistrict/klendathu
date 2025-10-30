@@ -7,11 +7,11 @@ import sys
 import traceback
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional, Union, AsyncIterator
+from typing import Any, Optional, Union, AsyncIterator, Type
 from types import TracebackType
 
 from .server import create_mcp_server
-from .types import StatusMessage, Summary, StackFrame, ContextItemType, DebugContext
+from .types import StatusMessage, Summary, StackFrame, ContextItemType, DebugContext, ImplementContext
 
 
 class ContextItem:
@@ -227,6 +227,8 @@ async def run_agent(
     pid: int,
     extra_instructions: Optional[str] = None,
     cli_path: Optional[str] = None,
+    prompt: Optional[str] = None,
+    schema: Optional[dict[str, Any]] = None,
 ) -> tuple[int, str, list[StatusMessage]]:
     """
     Runs the agent CLI with structured input
@@ -248,6 +250,13 @@ async def run_agent(
 
     if extra_instructions:
         input_data["extraInstructions"] = extra_instructions
+
+    # Add implement-specific fields
+    if mode == "implement":
+        if prompt:
+            input_data["prompt"] = prompt
+        if schema:
+            input_data["schema"] = schema
 
     stdin_data = json.dumps(input_data)
 
@@ -390,3 +399,104 @@ def investigate(
     asyncio.create_task(_run())
 
     return promise
+
+
+def implement(
+    prompt: str,
+    context: dict[str, Union[Any, ContextItem]],
+    model: Type[Any],
+    extra_instructions: Optional[str] = None,
+    cli_path: Optional[str] = None,
+    port: int = 0,
+    host: str = "localhost",
+) -> Any:
+    """
+    Implements functionality using Claude AI with structured output
+
+    Args:
+        prompt: Description of what to implement
+        context: Context variables to make available
+        model: Pydantic model class for the expected result schema
+        extra_instructions: Optional additional instructions for Claude
+        cli_path: Optional path to the CLI executable
+        port: Port for MCP server (0 for random)
+        host: Host for MCP server
+
+    Returns:
+        Promise that resolves with the validated result matching the schema
+
+    Example:
+        ```python
+        from pydantic import BaseModel
+
+        class UserResult(BaseModel):
+            name: str
+            age: int
+            email: str
+
+        result = implement(
+            "Create a user object with sample data",
+            {},
+            UserResult
+        )
+        user = await result
+        print(user)  # {'name': 'Alice', 'age': 30, 'email': 'alice@example.com'}
+        ```
+    """
+
+    async def _run() -> Any:
+        # Build context
+        context_vars, context_items = build_context(context)
+
+        # Extract call stack
+        call_stack = extract_call_stack(None, 2)
+
+        timestamp = datetime.utcnow().isoformat() + "Z"
+        pid = os.getpid()
+
+        implement_context: ImplementContext = {
+            "context": context_vars,
+            "contextDescriptions": {},
+            "timestamp": timestamp,
+            "pid": pid,
+            "model": model,
+        }
+
+        # Start MCP server with model
+        mcp_server = await create_mcp_server(implement_context, port, host)
+
+        # Serialize model schema to JSON (simplified)
+        schema_json = {}
+        if hasattr(model, "model_json_schema"):
+            schema_json = model.model_json_schema()
+
+        # Run the agent
+        exit_code, stdout, stderr_messages = await run_agent(
+            mode="implement",
+            mcp_url=mcp_server.url,
+            call_stack=call_stack,
+            context=context_items,
+            timestamp=timestamp,
+            pid=pid,
+            extra_instructions=extra_instructions,
+            cli_path=cli_path,
+            prompt=prompt,
+            schema=schema_json,
+        )
+
+        # Close server
+        await mcp_server.close()
+
+        if exit_code != 0:
+            raise RuntimeError(f"Implementation failed with exit code {exit_code}")
+
+        # Get the result from the server
+        try:
+            result = mcp_server.get_result()
+            return result
+        except Exception as error:
+            raise RuntimeError(
+                f"Agent did not call set_result tool. {str(error)}"
+            )
+
+    return asyncio.create_task(_run())
