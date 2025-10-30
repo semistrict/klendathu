@@ -1,4 +1,4 @@
-import type { DebugContext, LaunchOptions, DebuggerPromise, StatusMessage, Summary } from './types.js';
+import type { DebugContext, DebuggerPromise, StatusMessage, Summary } from './types.js';
 import { createMcpServer } from './server.js';
 import { extractCallStack, buildContext, emitEvent, runAgent } from './agent-runner.js';
 
