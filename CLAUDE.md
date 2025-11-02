@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**klendathu** is a runtime debugger that uses AI and the Model Context Protocol (MCP) to investigate errors in Node.js applications. When an error occurs, it spawns an MCP server that provides an `eval` tool for inspecting error context, then launches a CLI that connects an AI provider to investigate.
+**klendathu** is a runtime debugger that uses AI and the Model Context Protocol (MCP) to investigate errors in Node.js and Python applications. When an error occurs, it spawns an MCP server that provides an `eval` tool for inspecting error context, then launches a CLI that connects an AI provider to investigate.
 
 Built with the [Vercel AI SDK](https://sdk.vercel.ai) and supports all major AI providers.
 
@@ -19,9 +19,12 @@ pnpm build
 # Run all tests
 pnpm test
 
-# Run a single test file
+# Run a single test file (Node.js)
 cd packages/klendathu && pnpm test launcher.test
 cd packages/e2e-test && pnpm test debugger.test
+
+# Run Python tests
+cd packages/klendathu-py && pytest
 
 # Watch mode for development
 pnpm dev
@@ -32,9 +35,9 @@ pnpm clean
 
 ## Architecture
 
-The system has three main components that work together:
+The system has four main components that work together:
 
-### 1. Library (`packages/klendathu`)
+### 1. Node.js Library (`packages/klendathu`)
 
 The main library that users import. Key files:
 
@@ -94,18 +97,69 @@ A bundled executable (via Vite):
   - Uses Claude Agent SDK (requires `ANTHROPIC_API_KEY`)
   - Note: Claude Agent SDK doesn't provide token counts or finishReason - these fields are optional in the summary
 
+### 4. Python Library (`packages/klendathu-py`)
+
+The Python implementation that provides the same functionality for Python applications:
+
+- **`launcher.py`**: The `investigate()` and `implement()` functions for Python:
+  - `investigate()`: Investigates errors with AI
+    - Accepts a context dict with error and variables
+    - Extracts call stack from Python exceptions (using traceback)
+    - Returns a `DebuggerPromise` that resolves to Claude's investigation text
+    - Provides `stderr` async iterator for structured progress messages
+    - Provides `summary` property for cost/turn statistics
+  - `implement()`: AI-driven implementation with structured output
+    - Accepts a prompt, context, and Pydantic model for schema validation
+    - Returns validated result matching the model schema
+    - Agent must call `set_result` tool before finishing
+  - Both spawn the same `klendathu-cli` (Node.js) as a subprocess
+  - Pipes structured JSON input to the CLI via stdin
+
+- **`server.py`**: Creates a Python MCP debug server:
+  - Provides `eval` tool that executes Python code
+  - Provides `set_result` tool for implement mode (validates against Pydantic model)
+  - Provides `fail_implementation` tool for implement mode (allows agent to report failure with reason)
+  - Uses Python's `eval()` with access to `context` (all user-provided variables)
+  - Captures stdout/stderr output using `redirect_stdout` and `redirect_stderr`
+  - Runs on a random HTTP port by default (using aiohttp)
+  - Compatible with the same CLI protocol as the Node.js version
+
+- **`types.py`**: Core type definitions:
+  - `DebugContext`: The context object sent to the MCP server
+  - `ImplementContext`: Context for implement mode (includes Pydantic model)
+  - `DebuggerPromise`: Protocol for Promise-like object with `stderr` and `summary` properties
+  - `StatusMessage`: TypedDict for structured stderr messages
+  - Uses TypedDict and Protocol for type hints
+
+- **Key differences from Node.js version**:
+  - Uses `asyncio` instead of Promises
+  - Uses Python's `traceback` module for call stack extraction
+  - Uses `eval()` instead of `vm.runInContext()`
+  - Uses `aiohttp` for HTTP server instead of Express
+  - Compatible with Python 3.10+ (required by MCP SDK)
+
 ## Key Design Patterns
 
 ### ContextItem and ContextCallable
 
 Users can wrap context variables in `ContextItem` to provide descriptions:
 
+**Node.js:**
 ```typescript
 investigate({
   error,
   userId: new ContextItem(userId, 'The authenticated user ID'),
   getData: new ContextCallable(getData, 'Function to fetch user data')
 });
+```
+
+**Python:**
+```python
+investigate({
+  'error': error,
+  'user_id': ContextItem(user_id, 'The authenticated user ID'),
+  'get_data': ContextCallable(get_data, 'Function to fetch user data')
+})
 ```
 
 ### Structured Stderr Protocol
@@ -181,9 +235,23 @@ Get your API key from the [Anthropic Console](https://console.anthropic.com/).
   - Intercepts test failures and spawns investigation automatically
   - Can also use directly: `NODE_OPTIONS="--import=klendathu/playwright-hook" playwright test`
 
-## Future: Multi-Language Support
+## Multi-Language Support
 
-The architecture is designed to support Python, Go, etc.:
-1. Each language implements its own MCP server with an `eval` tool
-2. The language-specific library launches the same `klendathu-cli`
-3. The CLI is language-agnostic (just connects to MCP and talks to Claude)
+The architecture is designed to support multiple languages. Currently supports Node.js and Python:
+
+1. Each language implements its own MCP server with an `eval` tool (JavaScript VM or Python eval)
+2. The language-specific library launches the same `klendathu-cli` (Node.js)
+3. The CLI is language-agnostic (just connects to MCP server URL and talks to Claude)
+4. The structured JSON protocol over stdin/stderr is the same across all languages
+
+**Supported Languages:**
+- ✅ Node.js (`packages/klendathu`)
+- ✅ Python (`packages/klendathu-py`)
+
+**Future Languages:**
+Adding support for Go, Ruby, etc. follows the same pattern:
+1. Implement MCP server with `eval` tool in the target language
+2. Implement launcher that spawns `klendathu-cli` with structured JSON input
+3. Extract call stack using language-specific stack trace APIs
+4. Test with the same CLI (no CLI changes needed)
+- For Python always use uv
