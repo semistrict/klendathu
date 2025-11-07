@@ -13,19 +13,22 @@ Named after the bug planet from Starship Troopers.
 ## Commands
 
 ```bash
-# Build all packages (monorepo)
+# Build
 pnpm build
 
 # Run unit tests only (fast)
 pnpm test
 
+# Run E2E tests only (slow, requires API key)
+pnpm test:e2e
+
 # Run all tests including E2E (slow, requires API key)
 pnpm test:all
 
 # Run a single E2E test file
-pnpm --filter @klendathu/e2e-test test implement.test
-pnpm --filter @klendathu/e2e-test test implement-simple.test
-pnpm --filter @klendathu/e2e-test test implement-caching.test
+pnpm test:e2e test/implement.test.ts
+pnpm test:e2e test/implement-simple.test.ts
+pnpm test:e2e test/implement-caching.test.ts
 
 # Watch mode for development
 pnpm dev
@@ -38,7 +41,7 @@ pnpm clean
 
 The system has three main components that work together:
 
-### 1. Library (`packages/klendathu`)
+### 1. Library (`src/`)
 
 The main library that users import. Key files:
 
@@ -59,7 +62,7 @@ The main library that users import. Key files:
   - `ImplementInput`: Schema for structured task input
   - `StackFrame`: Stack frame information with file, line, column, function name
 
-### 2. CLI (`packages/klendathu-cli`)
+### 2. CLI (`src/cli.ts`)
 
 A bundled executable (via Vite):
 
@@ -102,7 +105,7 @@ A bundled executable (via Vite):
   - Saves transcript to cache for future reuse
   - On cache hit: replays last successful set_result without re-running agent
 
-### 3. E2E Tests (`packages/e2e-test`)
+### 3. E2E Tests (`test/`)
 
 - **`implement.test.ts`**: Full integration tests for implementation:
   - Tests AI-driven code implementation with various schemas
@@ -164,22 +167,22 @@ All communication happens over UDS (Unix Domain Socket) for local IPC efficiency
 
 ### CLI Path Resolution
 
-In development (monorepo), the library finds the CLI at:
-`packages/klendathu-cli/dist/cli.js`
+The library finds the CLI at:
+`dist/cli.js`
 
 This is resolved relative to the library's import.meta.url using `findCliPath()` in `agent-runner.ts`.
 
 ## Build Process
 
-- **klendathu**: TypeScript compiled with `tsc` (preserves .js extensions in imports)
-- **klendathu-cli**: Uses Vite for bundling with TypeScript type-checking before build
+- **Library**: TypeScript compiled with `tsc` (preserves .js extensions in imports)
+- **CLI**: Uses Vite for bundling with TypeScript type-checking before build
   - Type-checking runs via `pnpm typecheck` (tsc --noEmit)
   - Vite bundles src/cli.ts into dist/cli.js with shebang using SSR mode
   - All Node.js built-in modules are externalized (via `builtinModules`)
   - Externalized dependencies: `@anthropic-ai/claude-agent-sdk`, `@modelcontextprotocol/sdk`
   - Other dependencies (mustache, zod) are bundled
   - chmod +x is applied via build script
-- **Root pnpm test**: Runs `pnpm build` before tests to ensure everything is up-to-date
+- **Tests**: Run `pnpm build` before tests to ensure everything is up-to-date
 
 ## Authentication
 
@@ -195,7 +198,7 @@ If `ANTHROPIC_API_KEY` is not set, the `query()` call will use the default API k
 
 ## Testing Philosophy
 
-- E2E integration tests in `packages/e2e-test` for implementation functionality
+- E2E integration tests in `test/` for implementation functionality
 - Tests use real Claude Agent SDK (uses API key from environment)
 - Tests verify:
   - Successful implementation with correct schema validation
@@ -222,13 +225,12 @@ Enable detailed tracing to debug what Claude receives and how the system works:
 # Enable TRACE logging
 KLENDATHU_TRACE=1 pnpm test
 
-# View trace output (written to ~/.klendathu/trace.log)
-tail ~/.klendathu/trace.log
+# Trace output is written to ~/.klendathu/trace.log
 ```
 
 ### How TRACE Works
 
-`TRACE` is a tagged template literal function defined in `packages/klendathu-utils/src/logging.ts`:
+`TRACE` is a tagged template literal function defined in `src/logging.ts`:
 
 ```typescript
 TRACE`Message with ${variable}`
@@ -261,11 +263,11 @@ TRACE`Message with ${variable}`
 
 ### Files with Tracing
 
-- `packages/klendathu-utils/src/logging.ts` - TRACE function definition
-- `packages/klendathu/src/agent-runner.ts` - Process spawning and communication
-- `packages/klendathu/src/implement.ts` - Implementation execution and schema handling
-- `packages/klendathu-cli/src/server.ts` - MCP server creation and tool execution
-- `packages/klendathu-cli/src/cli.ts` - CLI initialization and agent query execution
+- `src/logging.ts` - TRACE function definition
+- `src/agent-runner.ts` - Process spawning and communication
+- `src/implement.ts` - Implementation execution and schema handling
+- `src/server.ts` - MCP server creation and tool execution
+- `src/cli.ts` - CLI initialization and agent query execution
 
 ## Architecture Notes
 

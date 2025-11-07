@@ -10,12 +10,12 @@ Uses [Claude Agent SDK](https://sdk.vercel.ai), [Model Context Protocol](https:/
 
 Named after the bug planet from Starship Troopers.
 
-## Packages
+## Structure
 
-- **klendathu** - Library to integrate into your Node.js apps
-- **klendathu-cli** - CLI (bundled executable) that runs the AI agent
-- **klendathu-utils** - Shared utilities (logging, types)
-- **e2e-test** - Integration tests
+- **src/** - Library and CLI source code
+- **test/** - Integration tests
+- **examples/** - Usage examples
+- **dist/** - Compiled output (library and CLI)
 
 ## Installation
 
@@ -111,11 +111,14 @@ Get your API key from the [Anthropic Console](https://console.anthropic.com/).
 # Run unit tests only (fast)
 pnpm test
 
+# Run E2E tests only (slow, requires API key)
+pnpm test:e2e
+
 # Run all tests including E2E (slow, requires API key)
 pnpm test:all
 
 # Run single E2E test
-pnpm --filter @klendathu/e2e-test test implement-simple.test
+pnpm test:e2e test/implement-simple.test.ts
 ```
 
 ## Debugging
@@ -124,7 +127,7 @@ Enable trace logging to see what's happening:
 
 ```bash
 KLENDATHU_TRACE=1 pnpm test
-# View logs: tail ~/.klendathu/trace.log
+# Logs are written to ~/.klendathu/trace.log
 ```
 
 ## Development
