@@ -1,46 +1,8 @@
 import { spawn } from 'node:child_process';
-import { resolve, dirname } from 'node:path';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { StatusMessageSchema } from 'klendathu-utils/types';
-import type { StatusMessage } from './types.js';
-import { ContextItem } from './launcher.js';
 import type { StackFrame, ContextItem as ContextItemType } from 'klendathu-utils/types';
 import { TRACE } from 'klendathu-utils/logging';
-
-export function emitEvent(message: { type: string; [key: string]: any }) {
-  console.error(JSON.stringify({ ...message, timestamp: new Date().toISOString() }));
-}
-
-/**
- * Captures the caller's directory from stack trace
- */
-export function captureCallerDir(skipFrames: number = 2): string | undefined {
-  const callerStack = new Error().stack || '';
-  let callerDir: string | undefined;
-
-  const stackLines = callerStack.split('\n');
-  // Skip first N lines (Error message and calling functions)
-  for (let i = skipFrames; i < stackLines.length; i++) {
-    const line = stackLines[i];
-    const match = line.match(/\(([^:)]+):\d+:\d+\)/) || line.match(/at ([^:]+):\d+:\d+/);
-    if (match) {
-      const filePath = match[1];
-      if (!filePath.includes('node_modules') && !filePath.startsWith('node:')) {
-        try {
-          const actualPath = filePath.startsWith('file://')
-            ? fileURLToPath(filePath)
-            : filePath;
-          callerDir = dirname(actualPath);
-          break;
-        } catch {
-          // Continue to next line
-        }
-      }
-    }
-  }
-
-  return callerDir;
-}
 
 /**
  * Extracts call stack from an error or current execution point
@@ -84,7 +46,7 @@ export function extractCallStack(error?: Error, skipFrames: number = 2): StackFr
  * Builds context items and vars from input
  */
 export function buildContext(context: {
-  [key: string]: unknown | ContextItem;
+  [key: string]: unknown;
 }): {
   contextVars: Record<string, unknown>;
   contextItems: ContextItemType[];
@@ -94,48 +56,58 @@ export function buildContext(context: {
   const contextItems: ContextItemType[] = [];
 
   for (const [key, value] of Object.entries(contextEntries)) {
-    if (value instanceof ContextItem) {
-      contextVars[key] = value.value;
+    contextVars[key] = value;
 
-      // Special handling for Error objects
-      if (value.value instanceof Error) {
-        const error = value.value;
-        const type = error.constructor.name;
-        const description = value.description
-          ? `${value.description}\nMessage: ${error.message}\nStack:\n${error.stack}`
-          : `Message: ${error.message}\nStack:\n${error.stack}`;
+    // Special handling for Error objects
+    if (value instanceof Error) {
+      const type = value.constructor.name;
+      const description = `Message: ${value.message}\nStack:\n${value.stack}`;
 
-        contextItems.push({
-          name: key,
-          type,
-          description,
-        });
-      } else {
-        contextItems.push({
-          name: key,
-          type: typeof value.value,
-          description: value.description,
-        });
-      }
+      contextItems.push({
+        name: key,
+        type,
+        description,
+      });
     } else {
-      contextVars[key] = value;
+      const type = typeof value;
+      let description: string | undefined;
 
-      // Special handling for Error objects
-      if (value instanceof Error) {
-        const type = value.constructor.name;
-        const description = `Message: ${value.message}\nStack:\n${value.stack}`;
+      // Extract methods from objects
+      if (type === 'object' && value !== null) {
+        try {
+          const methods: string[] = [];
+          const obj = value as Record<string, unknown>;
 
-        contextItems.push({
-          name: key,
-          type,
-          description,
-        });
-      } else {
-        contextItems.push({
-          name: key,
-          type: typeof value,
-        });
+          // Get all properties and methods
+          for (const prop in obj) {
+            if (typeof obj[prop] === 'function' && !prop.startsWith('__')) {
+              methods.push(prop);
+            }
+          }
+
+          // Also check prototype chain for common methods
+          const proto = Object.getPrototypeOf(obj);
+          if (proto) {
+            for (const prop of Object.getOwnPropertyNames(proto)) {
+              if (typeof proto[prop] === 'function' && !prop.startsWith('__') && !methods.includes(prop)) {
+                methods.push(prop);
+              }
+            }
+          }
+
+          if (methods.length > 0) {
+            description = `Available methods: ${methods.join(', ')}`;
+          }
+        } catch {
+          // Silently ignore if we can't extract methods
+        }
       }
+
+      contextItems.push({
+        name: key,
+        type,
+        description,
+      });
     }
   }
 
@@ -155,88 +127,40 @@ export function findCliPath(): string {
  * Runs the agent CLI with structured input
  */
 export async function runAgent(params: {
-  mode: 'investigate' | 'implement';
-  mcpUrl: string;
-  callStack: StackFrame[];
-  context: ContextItemType[];
-  timestamp: string;
-  pid: number;
-  extraInstructions?: string;
-  prompt?: string;
-  schema?: Record<string, unknown>;
   cliPath?: string;
   signal?: AbortSignal;
-  onStderr?: (message: StatusMessage) => void;
-}): Promise<{ exitCode: number | null; stdout: string }> {
-  TRACE`runAgent() called with mode: ${params.mode}`;
-  const { mode, mcpUrl, callStack, context, timestamp, pid, extraInstructions, prompt, schema, cliPath, signal, onStderr } = params;
+  udsPath?: string;
+  forceUseCache?: boolean;
+}): Promise<{ exitCode: number | null }> {
+  TRACE`runAgent() called`;
 
-  const resolvedCliPath = cliPath || findCliPath();
+  const resolvedCliPath = params.cliPath || findCliPath();
   TRACE`Resolved CLI path: ${resolvedCliPath}`;
 
-  emitEvent({ type: 'log', message: `Launching ${mode}: node ${resolvedCliPath}` });
+  // Build CLI arguments
+  const cliArgs = [resolvedCliPath];
+  if (params.udsPath) {
+    cliArgs.push(params.udsPath);
+  }
+
+  // Build environment variables
+  const env = { ...process.env };
+  if (params.forceUseCache) {
+    env.KLENDATHU_CACHE_MODE = 'force-use';
+    TRACE`Setting KLENDATHU_CACHE_MODE=force-use`;
+  }
 
   // Spawn the CLI with Node.js
-  TRACE`Spawning child process: node ${resolvedCliPath}`;
-  const child = spawn('node', [resolvedCliPath], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env: process.env,
+  TRACE`Spawning child process: node ${cliArgs.join(' ')}`;
+  const child = spawn('node', cliArgs, {
+    stdio: ['ignore', 'inherit', 'inherit'],
+    env,
   });
   TRACE`Child process spawned with PID: ${child.pid}`;
 
-  // Build structured input based on mode
-  const input: any = {
-    mode,
-    mcpUrl,
-    callStack,
-    context,
-    timestamp,
-    pid,
-    extraInstructions,
-  };
-
-  if (mode === 'implement') {
-    input.prompt = prompt;
-    input.schema = schema;
-  }
-
-  // Send structured data as JSON to stdin
-  const stdinData = JSON.stringify(input);
-  TRACE`Sending ${stdinData.length} bytes to child stdin`;
-  child.stdin?.write(stdinData);
-  child.stdin?.end();
-  TRACE`Stdin closed`;
-
-  let stdout = '';
-  let stderrBuffer = '';
-
-  // Capture stdout
-  child.stdout?.on('data', (data) => {
-    stdout += data.toString();
-  });
-
-  // Parse stderr line-by-line as JSON messages
-  child.stderr?.on('data', (data) => {
-    stderrBuffer += data.toString();
-    const lines = stderrBuffer.split('\n');
-    stderrBuffer = lines.pop() || '';
-
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const parsed = JSON.parse(line);
-        const message = StatusMessageSchema.parse(parsed);
-        onStderr?.(message);
-      } catch (err) {
-        // Ignore malformed JSON lines
-        console.warn('Failed to parse stderr line:', line, err);
-      }
-    }
-  });
-
   // Handle abort signal
-  if (signal) {
-    signal.addEventListener('abort', () => {
+  if (params.signal) {
+    params.signal.addEventListener('abort', () => {
       child.kill('SIGTERM');
     });
   }
@@ -250,6 +174,6 @@ export async function runAgent(params: {
     });
   });
 
-  TRACE`runAgent() returning with exitCode: ${exitCode}, stdout length: ${stdout.length}`;
-  return { exitCode, stdout };
+  TRACE`runAgent() returning with exitCode: ${exitCode}`;
+  return { exitCode };
 }

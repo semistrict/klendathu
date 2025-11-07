@@ -22,15 +22,17 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "express": "^5.1.0",
+    "express": "^4.21.2",
     "klendathu-utils": "workspace:*",
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "zod-to-json-schema": "^3.23.5"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.20.2",
     "@playwright/test": "^1.56.1",
     "@types/express": "^5.0.4",
     "@types/node": "^22.18.12",
+    "mustache": "^4.2.0",
     "typescript": "^5.9.3",
     "vitest": "^2.1.9"
   }

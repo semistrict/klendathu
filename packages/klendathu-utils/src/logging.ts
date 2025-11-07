@@ -6,7 +6,7 @@
 
 import { writeFileSync, appendFileSync, mkdirSync } from 'fs';
 import { homedir } from 'os';
-import { join, dirname } from 'path';
+import { join } from 'path';
 import { fileURLToPath } from 'url';
 
 const TRACE_ENABLED = process.env.KLENDATHU_TRACE === '1' || process.env.KLENDATHU_TRACE === 'true';
@@ -40,7 +40,8 @@ function getCallerLocation(): string {
     const line = stack[i];
     const match = line.match(/\s+at\s+(?:.*\s+)?\(?(.*):(\d+):(\d+)\)?/);
     if (match) {
-      let [, filePath, lineNum] = match;
+      const [, rawPath, lineNum] = match;
+      let filePath = rawPath;
 
       // Convert file:// URLs to paths
       if (filePath.startsWith('file://')) {
@@ -105,7 +106,7 @@ export function TRACE(strings: TemplateStringsArray, ...values: any[]): void {
 
   try {
     appendFileSync(TRACE_FILE, logLine);
-  } catch (err) {
+  } catch {
     // Silently fail - don't disrupt the application
   }
 }

@@ -1,105 +1,175 @@
 /**
  * klendathu CLI
  *
- * Connects to an MCP debugging server and uses Claude to investigate runtime errors.
- *
- * Usage:
- *   klendathu http://localhost:2839/mcp
- *   klendathu playwright test   # Runs command with Playwright hook
+ * Handles AI-powered code implementation via Claude Agent SDK.
+ * Connects to Hono server via HTTP/UDS and uses MCP for tool execution.
  */
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import Mustache from 'mustache';
-import { spawn } from 'child_process';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import { CliInputSchema } from 'klendathu-utils/types';
-import { INVESTIGATE_PROMPT_TEMPLATE, IMPLEMENT_PROMPT_TEMPLATE } from './strings.js';
+import { IMPLEMENT_PROMPT_TEMPLATE } from './strings.js';
 import { TRACE } from 'klendathu-utils/logging';
+import { createMcpServerWithHttpBackend } from './server.js';
+import { UdsHttpClient } from './uds-client.js';
+import { getCacheKey, getCachePath, loadCachedTranscript } from './cache.js';
+import { Transcript } from './transcript.js';
 
-function emitEvent(message: any) {
-  console.error(JSON.stringify({ ...message, timestamp: new Date().toISOString() }));
-}
-
-async function runWithPlaywrightHook(args: string[]) {
-  TRACE`runWithPlaywrightHook called with args: ${JSON.stringify(args)}`;
-  // Resolve path to playwright-hook
-  const cliPath = fileURLToPath(import.meta.url);
-  const cliDir = dirname(cliPath);
-  // Go up from klendathu-cli/dist to klendathu-cli, then to packages, then to klendathu
-  const klendathuPath = join(cliDir, '..', '..', 'klendathu', 'dist', 'playwright-hook.js');
-  TRACE`Resolved playwright-hook path: ${klendathuPath}`;
-
-  const nodeOptions = process.env.NODE_OPTIONS || '';
-  const newNodeOptions = `${nodeOptions} --import=${klendathuPath}`.trim();
-  TRACE`NODE_OPTIONS: ${newNodeOptions}`;
-
-  const [command, ...commandArgs] = args;
-  TRACE`Spawning: ${command} ${commandArgs.join(' ')}`;
-  const child = spawn(command, commandArgs, {
-    env: {
-      ...process.env,
-      NODE_OPTIONS: newNodeOptions,
-    },
-    stdio: 'inherit',
-  });
-  TRACE`Child process spawned with PID: ${child.pid}`;
-
-  return new Promise<number>((resolve) => {
-    child.on('close', (code) => {
-      TRACE`Child process exited with code: ${code}`;
-      resolve(code || 0);
-    });
-  });
-}
-
-async function main() {
+export async function main(options?: { udsPath?: string }) {
   TRACE`CLI main() started, PID: ${process.pid}`;
-  // Check if CLI was invoked with arguments
-  const args = process.argv.slice(2);
-  TRACE`CLI arguments: ${JSON.stringify(args)}`;
-  if (args.length > 0) {
-    TRACE`Running in command-with-hook mode`;
-    // Run command with Playwright hook
-    const exitCode = await runWithPlaywrightHook(args);
-    TRACE`Exiting with code: ${exitCode}`;
-    process.exit(exitCode);
-  }
 
-  TRACE`Running in stdin mode, reading input`;
-  // Read JSON input from stdin
-  let stdinData = '';
-  for await (const chunk of process.stdin) {
-    stdinData += chunk;
-  }
-  TRACE`Read ${stdinData.length} bytes from stdin`;
+  // Get UDS path from command line argument or options
+  const udsPath = options?.udsPath || process.argv[2];
 
-  if (!stdinData.trim()) {
-    emitEvent({ type: 'log', message: 'Error: No input provided on stdin' });
+  if (!udsPath) {
+    console.error('Error: UDS socket path required as argument');
     process.exit(1);
   }
 
-  // Parse and validate stdin input
-  let input;
+  TRACE`Connecting to Hono server at ${udsPath}`;
+
+  // Create HTTP client to connect to Hono server
+  const httpClient = new UdsHttpClient(udsPath);
+
+  // Fetch task details from Hono server
+  let taskDetails: any;
   try {
-    const rawInput = JSON.parse(stdinData);
-    input = CliInputSchema.parse(rawInput);
-    TRACE`Parsed input: mode=${input.mode}, mcpUrl=${input.mcpUrl}`;
+    const response = await httpClient.get('/task');
+    taskDetails = response.data;
+    TRACE`Fetched task details from ${udsPath}`;
   } catch (error) {
-    emitEvent({ type: 'log', message: `Error: Invalid stdin input: ${error}` });
+    console.error('Error fetching task details:', error);
     process.exit(1);
   }
 
-  // Build prompt from template based on mode
-  const prompt = input.mode === 'investigate'
-    ? Mustache.render(INVESTIGATE_PROMPT_TEMPLATE, input)
-    : Mustache.render(IMPLEMENT_PROMPT_TEMPLATE, input);
+  // Build prompt from template using fetched task details
+  const prompt = Mustache.render(IMPLEMENT_PROMPT_TEMPLATE, taskDetails);
   TRACE`Rendered prompt, length: ${prompt.length}`;
+  TRACE`Full prompt:\n${prompt}`;
 
-  const { mcpUrl } = input;
+  // Check cache if schema is available
+  let cachedTranscript: any = null;
+  let cachePath: string | null = null;
+  const cacheMode = process.env.KLENDATHU_CACHE_MODE || 'normal';
+  const shouldIgnoreCache = cacheMode === 'ignore';
+  const shouldForceCache = cacheMode === 'force-use';
 
-  emitEvent({ type: 'log', message: `Connecting to MCP server at ${mcpUrl}...` });
-  TRACE`Calling query() with mcpUrl: ${mcpUrl}`;
+  if (taskDetails.schema && !shouldIgnoreCache) {
+    const cacheKey = getCacheKey(taskDetails.instruction, taskDetails.schema);
+    cachePath = getCachePath(cacheKey);
+    TRACE`Cache key: ${cacheKey}, path: ${cachePath}, mode: ${cacheMode}`;
+    cachedTranscript = loadCachedTranscript(cachePath);
+
+    if (cachedTranscript) {
+      TRACE`Cache hit! Using cached transcript`;
+      const calls = cachedTranscript.calls || cachedTranscript;
+
+      // Find the last successful set_result call
+      const lastSuccessful = calls
+        .filter((call: any) => call.tool === 'set_result')
+        .reverse()
+        .find((call: any) => !call.result.error);
+
+      if (!lastSuccessful) {
+        TRACE`No successful set_result found in cached transcript`;
+        console.error('Error: No successful result in cache');
+        process.exit(1);
+      }
+
+      // Replay all calls in order to rebuild VM state
+      try {
+        for (const call of calls) {
+          if (call.tool === 'eval') {
+            TRACE`Replaying eval call`;
+            const response = await httpClient.post('/eval', { code: call.code });
+            // Compare result with what was recorded in transcript
+            const originalWasError = call.result?.error === true;
+            const responseObj = response.data as Record<string, unknown>;
+            const currentIsError = responseObj?.error === true;
+
+            // If original succeeded but current fails, environment has changed - fallback to fresh agent
+            if (!originalWasError && currentIsError) {
+              const errorMsg = typeof responseObj?.message === 'string' ? responseObj.message : 'Unknown error';
+              TRACE`Eval result changed from success to failure: ${errorMsg}. Environment mismatch detected.`;
+              throw new Error(`Eval environment mismatch: ${errorMsg}`);
+            }
+          }
+        }
+
+        // Then replay the successful set_result
+        TRACE`Replaying set_result call via /complete endpoint`;
+        const completeResponse = await httpClient.post('/complete', { code: lastSuccessful.code });
+        // Compare result with what was recorded
+        const originalWasError = lastSuccessful.result?.error === true;
+        const completeObj = completeResponse.data as Record<string, unknown>;
+        const currentIsError = completeObj?.error === true;
+
+        // If original succeeded but current fails, environment has changed - fallback to fresh agent
+        if (!originalWasError && currentIsError) {
+          const errorMsg = typeof completeObj?.message === 'string' ? completeObj.message : 'Unknown error';
+          TRACE`Set_result result changed from success to failure: ${errorMsg}. Environment mismatch detected.`;
+          throw new Error(`Set_result environment mismatch: ${errorMsg}`);
+        }
+        console.log(JSON.stringify(lastSuccessful.result.data));
+        process.exit(0);
+      } catch (error) {
+        TRACE`Failed to replay cached transcript: ${error}. Discarding transcript and running agent fresh`;
+        console.error('Error replaying cached transcript:', error);
+        // Don't exit - continue to run agent fresh as if no cache existed
+      }
+    } else if (shouldForceCache) {
+      TRACE`Cache required but not found (KLENDATHU_CACHE=${cacheMode})`;
+      console.error('Error: Cache required but cache not found');
+      // Notify server of failure before exiting to reject the promise immediately
+      await httpClient.post('/complete', {
+        failure: true,
+        message: 'Cache required but cache not found',
+      }).catch(() => {});
+      process.exit(1);
+    }
+  }
+
+  // Store computed result when set_result is called
+  let computedResult: unknown;
+
+  // Track transcript of all tool calls
+  const transcript = new Transcript();
+
+  // Set task details in transcript if schema is available
+  if (taskDetails.schema) {
+    transcript.setTaskDetails(prompt, taskDetails.schema, taskDetails.context);
+  }
+
+  // Helper function to save intermediate transcript
+  const saveIntermediateTranscript = async (success: boolean = false) => {
+    if (cachePath) {
+      try {
+        TRACE`Saving intermediate transcript to ${cachePath} (success=${success})`;
+        await transcript.save(cachePath, success);
+      } catch (err) {
+        TRACE`Failed to save intermediate transcript: ${err}`;
+      }
+    }
+  };
+
+  // Create in-process MCP server that delegates to HTTP backend
+  TRACE`Creating in-process MCP server`;
+  const mcpServer = createMcpServerWithHttpBackend(httpClient, {
+    onSetResult: (result) => {
+      computedResult = result;
+      TRACE`Stored set_result result: ${JSON.stringify(result)}`;
+    },
+    abort: () => {
+      TRACE`set_result completed, will exit after current iteration`;
+    },
+    onToolCall: (tool, code, result) => {
+      transcript.record(tool, code, result);
+      // Save intermediate transcript after each tool call (fire and forget)
+      saveIntermediateTranscript(false).catch((err) => {
+        TRACE`Failed to save transcript after tool call: ${err}`;
+      });
+    },
+  });
+  TRACE`MCP server created`;
 
   try {
     const result = query({
@@ -109,90 +179,51 @@ async function main() {
           type: 'preset',
           preset: 'claude_code',
         },
-        permissionMode: 'bypassPermissions', // Auto-accept all operations
+        permissionMode: 'bypassPermissions',
         mcpServers: {
-          debugger: {
-            type: 'http',
-            url: mcpUrl,
-          },
+          debugger: mcpServer,
         },
-        // All Claude Code tools are available: Read, Write, Edit, Bash, Grep, Glob, etc.
-        // No tool restrictions - agent has full access to investigate
       },
     });
     TRACE`query() call initiated, starting message loop`;
 
-    let turnNumber = 0;
-    const toolCalls = new Map<string, string>();
-
     for await (const message of result) {
-      TRACE`Received message: ${JSON.stringify(message)}`;
-      if (message.type === 'assistant') {
-        turnNumber++;
-        emitEvent({
-          type: 'turn',
-          turnNumber,
-          stopReason: message.message.stop_reason || undefined,
-        });
-
-        // Print assistant text messages to stdout
-        for (const block of message.message.content) {
-          if (block.type === 'text') {
-            console.log(block.text);
-          } else if (block.type === 'tool_use') {
-            toolCalls.set(block.id, block.name);
-            emitEvent({
-              type: 'tool_call',
-              toolName: block.name,
-              input: block.input,
-            });
-          }
-        }
-      } else if (message.type === 'user') {
-        // User messages contain tool results
-        for (const block of message.message.content) {
-          if (block.type === 'tool_result') {
-            const toolName = toolCalls.get(block.tool_use_id) || 'unknown';
-            let resultPreview = '';
-            for (const content of block.content) {
-              if (typeof content === 'object' && content.type === 'text') {
-                resultPreview = content.text.slice(0, 200);
-                break;
-              }
-            }
-            emitEvent({
-              type: 'tool_result',
-              toolName,
-              resultPreview,
-            });
-          }
-        }
-      } else if (message.type === 'result') {
-        if (message.subtype === 'success') {
-          TRACE`Final result: ${message.result}`;
-          console.log('\n--- Final Result ---');
-          console.log(message.result);
-
-          // Emit summary as the last stderr message
-          emitEvent({
-            type: 'summary',
-            cost: message.total_cost_usd,
-            turns: message.num_turns,
-          });
-        } else {
-          TRACE`Investigation failed with subtype: ${message.subtype}`;
-          emitEvent({ type: 'log', message: `Error: ${message.subtype}` });
-          process.exit(1);
-        }
+      TRACE`Received message type: ${message.type}`;
+      transcript.recordMessage(message);
+      // Save intermediate transcript after each message
+      await saveIntermediateTranscript(false);
+      // If result was computed via set_result, we can exit the loop
+      if (computedResult !== undefined) {
+        break;
       }
     }
+
+    // Output the computed result
+    const output = computedResult !== undefined ? computedResult : {};
+    TRACE`Outputting result: ${JSON.stringify(output)}`;
+    console.log(JSON.stringify(output));
+
+    // Save final transcript with success flag if result was computed
+    if (taskDetails.schema) {
+      const success = computedResult !== undefined;
+      TRACE`Saving final transcript with success=${success}`;
+      await saveIntermediateTranscript(success);
+    }
   } catch (error) {
-    emitEvent({ type: 'log', message: `Failed to connect: ${error}` });
+    // Save transcript with failure flag before exiting
+    TRACE`Implementation failed: ${error}`;
+    if (taskDetails.schema) {
+      TRACE`Saving transcript with success=false due to error`;
+      await saveIntermediateTranscript(false);
+    }
+    console.error(`Failed to execute: ${error}`);
     process.exit(1);
   }
 }
 
-main().catch((error) => {
-  emitEvent({ type: 'log', message: `Fatal error: ${error}` });
-  process.exit(1);
-});
+// Only run main() if this file is being executed directly, not imported in tests
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch(() => {
+    process.exit(1);
+  });
+}

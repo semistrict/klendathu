@@ -1,96 +1,93 @@
 /**
- * Prompt templates for investigate and implement modes
- * Uses mustache templating - parameters match InvestigateInput and ImplementInput types
+ * Prompt template for implement mode
+ * Uses mustache templating - parameters match ImplementInput type
  */
 
-export const INVESTIGATE_PROMPT_TEMPLATE = `Execution is currently paused at:
-
-{{#callStack}}
-{{filePath}}{{#line}}:{{line}}{{/line}}{{#column}}:{{column}}{{/column}}{{#functionName}} ({{functionName}}){{/functionName}}
-{{/callStack}}
-
-PID {{pid}} at {{timestamp}}
-
-<available_context>
-{{#context}}
-- {{name}}: {{type}}{{#description}} - {{description}}{{/description}}
-{{/context}}
-</available_context>
-
-<instructions>
-You have access to an "eval" MCP tool that can execute JavaScript functions with access to the error context.
-
-The eval tool accepts a "function" parameter containing a JavaScript function expression like: "async () => { return someVariable; }"
-
-Available in the eval context:
-- context: Object containing all captured context variables
-- All Node.js globals: console, process, Buffer, Promise, etc.
-
-Your investigation should:
-1. Use eval to inspect context variables as needed
-2. Use console.log() inside eval functions - all console output will be captured and returned to you
-
-After your investigation, provide:
-- A clear description of what happened
-- The root cause based on the context
-- Specific suggestions for how to fix it
-</instructions>
-
-Begin your investigation now.{{#extraInstructions}}
-
-<additional_instructions>
-{{extraInstructions}}
-</additional_instructions>{{/extraInstructions}}`;
-
 export const IMPLEMENT_PROMPT_TEMPLATE = `You are implementing functionality on behalf of a user.
-YOU MUST CALL THE set_result TOOL WITH YOUR COMPLETED IMPLEMENTATION.
 
 # Implementation Request
 
-{{prompt}}
+{{instruction}}
+
+# Execution Context
+
+- **Triggered at**: {{timestamp}}
+- **Process ID**: {{pid}}
+
+The implementation is being requested from:
+{{#callStack}}
+- {{filePath}}{{#line}}:{{line}}{{/line}}{{#functionName}} ({{functionName}}){{/functionName}}
+{{/callStack}}
+
+# Expected Output Schema
+
+Your final result must match this JSON Schema:
+
+{{{schema}}}
+
+You MUST return an object with all required fields from the schema.
 
 # Available Context
 
 You will be given the following context variables:
 
 {{#context}}
-- {{name}}: {{type}}{{#description}} - {{description}}{{/description}}
+- **{{name}}** ({{type}}){{#description}}: {{description}}{{/description}}
 {{/context}}
 
 # Available Tools
 
-You have access to the following MCP tools:
+You have access to three MCP tools:
 
-1. "eval" - Execute JavaScript to inspect context and test your implementation
-   - Function format: "async () => { return someValue; }"
-   - Has access to: context object, Node.js globals
-   - Use console.log() for debugging - output will be captured
-   - Use this to explore context and validate your logic
+1. "eval" - Execute JavaScript code to set up state and compute values (optional)
+   - Your code runs in a persistent context, so variables you create are available in later calls
+   - Use this if you need to: compute intermediate values, mutate state (e.g., Playwright navigation), or perform side effects
+   - The context variables are already described above - do not use eval to explore them
+   - Function format: "async () => { /* your code */ }"
+   - To persist values across calls, assign to \`vars\` object: "async () => { vars.items = context.data.map(x => x * 2); return vars.items; }"
+   - Then in later evals or set_result, access via: \`vars.items\` (e.g., \`vars.items.length\`)
+   - Example: "async () => { const result = await context.page.goto('https://example.com'); vars.url = context.page.url(); return { navigated: true }; }"
+   - All eval calls are recorded and will be replayed when cached
 
-2. "set_result" - Set the final implementation result
-   - Takes a function (sync or async) that receives context and returns the result
-   - Function format: "(context) => ({ field1: value1, field2: value2 })" or "async (context) => ({ field1: value1, field2: value2 })"
-   - The returned object MUST match the expected schema
-   - YOU MUST CALL THIS TOOL BEFORE FINISHING
-   - YOU MUST CALL THIS TOOL BEFORE FINISHING
+2. "set_result" - Execute a code block to produce your final result
+   - The code must be an async function that returns your final result
+   - Function format: "async () => { /* your code */ return { /* result object */ }; }"
+   - The returned object must match the schema exactly
+   - You can use: context variables, values from previous evals (via \`vars\`), or compute new values
+   - Example: "async () => { return { result: vars.items, count: vars.items.length }; }"
+   - Example combining vars and context: "async () => { return { greeting: \`Hello, \${context.name}!\`, processed: vars.processed }; }"
+
+3. "bail" - Fail the implementation with an error message
+   - Use this when the task is impossible or cannot be completed
+   - Takes a single parameter: message (string explaining why the task cannot be completed)
+   - Example: "Cannot complete: the impossible constraint requires a number >= 10 AND <= 5 which is mathematically impossible"
+   - This will immediately terminate the implementation with your error message
 
 # Implementation Workflow
 
 Follow these steps to complete the implementation:
 
-1. Use eval to explore the context and understand the available data
-2. Design your implementation approach based on the requirements
-3. Use eval to test your logic and verify correctness
-4. Call set_result with a function that returns your final implementation
-5. If validation fails, read the error message and call set_result again with corrections
+1. Review the context variables listed above - you already know what's available
+2. If you need to compute intermediate values or perform state mutations/side effects, use eval to set them up
+3. Call set_result with an async function that produces the final result
+   - This is the FINAL step - after calling set_result, do NOT provide any narrative or explanation
+   - Call this ONCE with an async function that computes and returns the result object
+   - Your code has access to all variables you set up in eval calls and the context object
+   - The function must return an object matching the schema exactly
+   - Example: "async () => { const processed = context.items.map(x => x * 2); return { doubled: processed }; }"
 
-IMPORTANT: The set_result tool is REQUIRED. Your task is not complete until you call it successfully.
+# CRITICAL: Your Workflow Must Be Exactly
 
-Begin your implementation now.{{#extraInstructions}}
+1. Use eval() if you need to compute values or perform state mutations/side effects (optional, only when needed)
+2. Call set_result() with code that returns the final result object
+3. STOP - do not provide any explanations after calling set_result
 
-# Custom Instructions
+The result you return from set_result's code block IS your final answer. Do not add narrative before or after.
 
-Please keep the following custom instructions in mind when implementing.
-If these instructions are not relevant to the current task, you may ignore them.
+# Important Notes
 
-{{extraInstructions}}{{/extraInstructions}}`;
+- All field names in your final result MUST match the schema exactly
+- If the schema has fields {doubled}, your code must return: ({ doubled: [...] })
+- Return only the data object, nothing else
+
+Begin your implementation now.`;

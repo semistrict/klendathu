@@ -1,34 +1,21 @@
 # klendathu
 
-Debug runtime errors with AI assistance.
+AI-powered code implementation library using Claude and the Model Context Protocol (MCP).
 
 ## Overview
 
-When an exception occurs in your Node.js application, `klendathu` spawns an interactive AI debugging session with access to your error context. The AI can inspect the error, examine variables, and help you understand what went wrong.
+`klendathu` generates code based on natural language prompts and JSON schemas. Given a prompt (what to build) and a schema (expected output shape), it spawns Claude via the Agent SDK to implement the functionality and returns a validated result.
 
-Uses the [Vercel AI SDK](https://sdk.vercel.ai) and supports all major AI providers (Anthropic, OpenAI, Google, etc.).
+Uses [Claude Agent SDK](https://sdk.vercel.ai), [Model Context Protocol](https://modelcontextprotocol.io/), and [Zod](https://zod.dev/) for schema validation.
 
-## Architecture
-
-```
-Your Application
-    │
-    ├─ Error occurs
-    │
-    └─ investigate(context)
-           │
-           ├─> Starts debug server with eval tool
-           │   (provides access to error context)
-           │
-           └─> Spawns klendathu CLI
-               │
-               └─> AI investigates the error
-```
+Named after the bug planet from Starship Troopers.
 
 ## Packages
 
 - **klendathu** - Library to integrate into your Node.js apps
-- **klendathu-cli** - CLI that connects AI providers to investigate errors
+- **klendathu-cli** - CLI (bundled executable) that runs the AI agent
+- **klendathu-utils** - Shared utilities (logging, types)
+- **e2e-test** - Integration tests
 
 ## Installation
 
@@ -39,30 +26,74 @@ pnpm build
 
 ## Usage
 
+### Basic Example
+
 ```typescript
-import { investigate } from 'klendathu';
+import { implement } from 'klendathu';
+import { z } from 'zod';
 
-async function processData(data) {
-  const userId = data.user.id;
-  const items = fetchItems(userId);
-  // ... more code
-}
+// Define what you want
+const greetingSchema = {
+  greeting: z.string(),
+  name: z.string(),
+};
 
-try {
-  await processData(someData);
-} catch (error) {
-  // Investigate with AI - provide error and local context
-  await investigate({
-    error,
-    data: someData,
-    userId
-  });
-}
+// Implement it with AI
+const result = await implement(
+  'Create a greeting message for Alice',
+  { personName: 'Alice' },
+  greetingSchema
+);
+
+// result is typed: { greeting: string; name: string }
+console.log(result.greeting); // "Hello, Alice! Welcome!"
 ```
 
-The AI will have access to an `eval` tool that can execute code with:
-- All context variables you passed (error, data, userId in this example)
-- All Node.js globals (console, process, Buffer, etc.)
+### Best Practice: Add Descriptions
+
+Use `.describe()` on schema fields to guide Claude towards correct output formatting:
+
+```typescript
+import { implement } from 'klendathu';
+import { z } from 'zod';
+
+// Define schema with descriptions for each field
+const orderSchema = {
+  orderId: z.string().describe('Order ID as a string'),
+  total: z.string().describe('Total amount as a decimal number string (e.g., "99.99"), without currency symbol or dollar sign'),
+  itemCount: z.number().describe('Number of items in the order'),
+  items: z.array(z.string()).describe('List of item names'),
+};
+
+// Implement with AI
+const result = await implement(
+  'Extract the order details from the provided HTML',
+  { pageHTML: '<div>...</div>' },
+  orderSchema
+);
+
+console.log(result.total); // "99.99" (no dollar sign)
+```
+
+The descriptions are sent to Claude, helping it understand exactly what format you expect for each field.
+
+## How It Works
+
+1. **Library** starts an HTTP server on Unix Domain Socket
+2. **Library** spawns CLI subprocess, passes socket path
+3. **CLI** fetches task details (prompt, schema, context) from server
+4. **CLI** checks cache (skip agent if seen before)
+5. **CLI** creates in-process MCP server with `eval` and `set_result` tools
+6. **CLI** invokes Claude Agent SDK with the Mustache-rendered prompt
+7. **Claude** uses the tools to write and execute code
+8. **CLI** returns validated result to stdout
+9. **Library** validates result against schema, returns to user
+
+## Caching
+
+Implementations are cached by instruction + schema. Subsequent calls with the same prompt skip the agent and replay the cached transcript directly, saving time and API costs.
+
+Cache location: `.klendathu/cache/` (or `$KLENDATHU_CACHE`)
 
 ## Authentication
 
@@ -74,44 +105,27 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 Get your API key from the [Anthropic Console](https://console.anthropic.com/).
 
-## Example Debugging Session
+## Testing
 
-```typescript
-// The AI can use the eval tool like this:
-{
-  "function": "async () => { return context.error.stack; }"
-}
+```bash
+# Run unit tests only (fast)
+pnpm test
 
-// Or inspect variables:
-{
-  "function": "async () => { return { userId: context.userId, dataKeys: Object.keys(context.data) }; }"
-}
+# Run all tests including E2E (slow, requires API key)
+pnpm test:all
 
-// Or execute complex debugging logic:
-{
-  "function": "async () => {
-    const frames = context.error.stack.split('\\n').slice(1, 4);
-    const userContext = context.data?.user;
-    return { frames, userContext };
-  }"
-}
+# Run single E2E test
+pnpm --filter @klendathu/e2e-test test implement-simple.test
 ```
 
-## Debug Server Details
+## Debugging
 
-The debug server provides one tool:
+Enable trace logging to see what's happening:
 
-### `eval`
-
-Evaluates a JavaScript function expression with access to error context.
-
-**Parameters:**
-- `function` (string) - Function expression like `"async () => { ... }"`
-
-**Context available in function:**
-- `context` - Object containing all context variables you passed
-- `metadata` - Timestamp, PID, context descriptions, etc.
-- Node.js globals (console, process, Buffer, etc.)
+```bash
+KLENDATHU_TRACE=1 pnpm test
+# View logs: tail ~/.klendathu/trace.log
+```
 
 ## Development
 
@@ -124,13 +138,9 @@ pnpm build
 
 # Watch mode
 pnpm dev
+
+# Run linter
+pnpm lint
 ```
 
-## Future: Multi-Language Support
-
-The architecture is designed to support other languages. A Python version would:
-1. Implement the same debug server with an eval tool
-2. Use Python's debugging APIs to capture context
-3. Launch the same klendathu CLI
-
-This allows the debugging experience to be consistent across languages.
+See [CLAUDE.md](./CLAUDE.md) for detailed architecture and implementation notes.

@@ -65,15 +65,24 @@ describe('implement() end-to-end', () => {
         formFilled: z.boolean(),
       };
 
-      // Agent gets the page but NOT the random result
+      // Agent gets the page object with Playwright API instructions
       const result = await implement(
-        `Using the Playwright page object:
-1. Fill in the name field (#name) with "John Doe"
-2. Fill in the email field (#email) with "john@example.com"
-3. Fill in the message field (#message) with "Hello, this is a test message"
+        `Use context.page (Playwright Page object) to automate the form:
+
+Available page methods you can call via context.page:
+- context.page.fill(selector, value) - Fill an input field
+- context.page.click(selector) - Click an element
+- context.page.textContent(selector) - Get text content of an element
+- context.page.waitForSelector(selector) - Wait for an element to appear
+
+Steps:
+1. Fill field #name with "John Doe"
+2. Fill field #email with "john@example.com"
+3. Fill field #message with "Hello, this is a test message"
 4. Click the submit button
-5. Wait for the result div (#result) to become visible
-6. Return the text content of the result div and true for formFilled`,
+5. Wait for #result to appear with waitForSelector
+6. Get the text content from #result
+7. Return { resultText: <content>, formFilled: true }`,
         { page },
         automationSchema
       );

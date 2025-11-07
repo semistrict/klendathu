@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**klendathu** is a runtime debugger that uses AI and the Model Context Protocol (MCP) to investigate errors in Node.js applications. When an error occurs, it spawns an MCP server that provides an `eval` tool for inspecting error context, then launches a CLI that connects an AI provider to investigate.
+**klendathu** is an AI-powered code implementation library that uses Claude and the Model Context Protocol (MCP) to generate code based on prompts and schemas. The library spawns an MCP server that provides tools for code execution, then launches a CLI that connects Claude Agent SDK to implement functionality.
 
-Built with the [Vercel AI SDK](https://sdk.vercel.ai) and supports all major AI providers.
+Built with [Claude Agent SDK](https://sdk.vercel.ai) and the [Model Context Protocol](https://modelcontextprotocol.io/).
 
 Named after the bug planet from Starship Troopers.
 
@@ -16,12 +16,16 @@ Named after the bug planet from Starship Troopers.
 # Build all packages (monorepo)
 pnpm build
 
-# Run all tests
+# Run unit tests only (fast)
 pnpm test
 
-# Run a single test file
-cd packages/klendathu && pnpm test launcher.test
-cd packages/e2e-test && pnpm test debugger.test
+# Run all tests including E2E (slow, requires API key)
+pnpm test:all
+
+# Run a single E2E test file
+pnpm --filter @klendathu/e2e-test test implement.test
+pnpm --filter @klendathu/e2e-test test implement-simple.test
+pnpm --filter @klendathu/e2e-test test implement-caching.test
 
 # Watch mode for development
 pnpm dev
@@ -38,104 +42,132 @@ The system has three main components that work together:
 
 The main library that users import. Key files:
 
-- **`launcher.ts`**: The `investigate()` function that orchestrates everything:
-  - Accepts a context object with error and variables
-  - Starts an HTTP MCP server with the debug context
-  - Spawns the CLI as a child process
-  - Pipes structured JSON input to the CLI via stdin (mcpUrl, callStack, context, etc.)
-  - Returns a Promise that resolves to Claude's investigation text
-  - Provides `stderr` async iterator for structured progress messages
-  - Provides `summary` Promise for cost/turn statistics
+- **`implement.ts`**: The `implement()` function that orchestrates code generation:
+  - Accepts a prompt (what to implement) and Zod schema (expected result shape)
+  - Starts Hono HTTP server on Unix Domain Socket (UDS)
+  - Spawns CLI subprocess passing the UDS socket path
+  - Returns a Promise that resolves to validated result matching schema
 
-- **`server.ts`**: Creates the MCP debug server:
-  - Provides a single `eval` tool that executes JS in a VM context
-  - The VM has access to `context` (all user-provided variables) and Node.js globals
-  - Captures `console.log()` output and returns it with the eval result
-  - Runs on a random HTTP port by default
+- **`agent-runner.ts`**: Process management and utilities:
+  - `runAgent()`: Spawns CLI subprocess with inherited stdio
+  - `extractCallStack()`: Extracts stack frames from errors
+  - `buildContext()`: Processes context variables into array format with type info
+  - `findCliPath()`: Resolves CLI bundle location
 
 - **`types.ts`**: Core interfaces
-  - `DebugContext`: The context object sent to the MCP server
-  - `DebuggerPromise`: Special Promise with `stderr` and `summary` properties
-  - `StderrMessage`: Zod schema for structured stderr (all stderr is JSON)
+  - `ImplementOptions`: Configuration options (signal, cliPath, udsPath, forceUseCache)
+  - `ImplementInput`: Schema for structured task input
+  - `StackFrame`: Stack frame information with file, line, column, function name
 
 ### 2. CLI (`packages/klendathu-cli`)
 
 A bundled executable (via Vite):
 
 - **`cli.ts`**:
-  - Reads structured JSON input from stdin containing:
-    - `mode`: 'investigate' or 'implement'
-    - `mcpUrl`: HTTP MCP server URL
-    - `callStack`: Array of stack frames
-    - `context`: Array of context items with names/types/descriptions
-    - `timestamp`, `pid`, `extraInstructions`
-  - Renders prompt from template using Mustache
-  - Uses `@anthropic-ai/claude-agent-sdk` `query()` function
-  - Connects to MCP server with Claude Code preset (`systemPrompt: { type: 'preset', preset: 'claude_code' }`)
+  - Receives UDS socket path as command-line argument
+  - Connects to Hono HTTP server via Unix Domain Socket
+  - Fetches task details (prompt, schema, context) from GET /task endpoint
+  - Checks for cached transcript and uses it if available (skip agent if cache hit)
+  - Creates in-process MCP server that delegates tool calls to HTTP endpoints
+  - Uses `@anthropic-ai/claude-agent-sdk` `query()` function with Claude Code preset
   - Permission mode: `bypassPermissions` (auto-accepts all operations)
-  - Emits structured JSON to stderr for progress tracking
-  - Outputs final investigation result to stdout
+  - Records all agent messages and tool calls to transcript
+  - Outputs final result to stdout as JSON
+  - Saves transcript to cache for future reuse
 
-- **`types.ts`**: Input/output schemas
-  - `CliInputSchema`: Discriminated union of InvestigateInput and ImplementInput
-  - `StatusMessageSchema`: All stderr messages (log, server_started, turn, tool_call, tool_result, summary)
+- **`types.ts`**: Type definitions only (no exported schemas)
 
 - **`strings.ts`**: Mustache prompt templates
-  - `INVESTIGATE_PROMPT_TEMPLATE`: Instructions for investigating errors
-  - `IMPLEMENT_PROMPT_TEMPLATE`: Instructions for implementing functionality
+  - `IMPLEMENT_PROMPT_TEMPLATE`: Instructions for code implementation
+
+- **`server.ts`**: In-process MCP server
+  - Creates in-process MCP server using Claude Agent SDK
+  - Provides `eval` tool that delegates to HTTP POST /eval endpoint
+  - Provides `set_result` tool that delegates to HTTP POST /complete endpoint
+  - Provides `bail` tool for graceful failure with custom error messages
+  - Returns results to Claude Agent SDK for direct execution
+
+- **`cache.ts`**: Transcript caching
+  - Generates cache key from instruction slug + SHA256(instruction + schema) hash
+  - Slug limited to 50 characters, lowercase alphanumeric + underscores
+  - Key format: `{instruction_slug}_{sha256_hash}.json`
+  - Stored in `.klendathu/cache/` relative to project root (determined by walking up for `.klendathu` or `.git`)
+  - Environment variables:
+    - `KLENDATHU_CACHE`: Override cache directory path (e.g., for testing)
+    - `KLENDATHU_CACHE_MODE`: Control cache behavior (`force-use` to require cache, `ignore` to skip cache, default `normal`)
+  - Full transcript saved (all messages and tool calls)
+
+- **`transcript.ts`**: Transcript management
+  - Records all agent messages and tool calls during execution
+  - Saves transcript to cache for future reuse
+  - On cache hit: replays last successful set_result without re-running agent
 
 ### 3. E2E Tests (`packages/e2e-test`)
 
-- **`debugger.test.ts`**: Full integration test that:
-  - Creates a real error (accessing undefined property)
-  - Calls `investigate()` with error context
-  - Spawns the actual server and CLI
-  - Verifies the AI produces a useful investigation
-  - Uses Claude Agent SDK (requires `ANTHROPIC_API_KEY`)
-  - Note: Claude Agent SDK doesn't provide token counts or finishReason - these fields are optional in the summary
+- **`implement.test.ts`**: Full integration tests for implementation:
+  - Tests AI-driven code implementation with various schemas
+  - Verifies result validation against Zod schemas
+  - Uses Claude Agent SDK (uses API key from environment)
+  - Tests cost money and take time (~20-40s per test)
+
+- **`implement-simple.test.ts`**: Basic implement tests
+  - Quick sanity checks for simple implementations
+
+- **`implement-caching.test.ts`**: Caching functionality tests
+  - Verifies transcript caching and replay
+  - Tests schema-based cache key generation
 
 ## Key Design Patterns
 
-### ContextItem and ContextCallable
+### HTTP/UDS Architecture
 
-Users can wrap context variables in `ContextItem` to provide descriptions:
+Library and CLI communicate via HTTP over Unix Domain Socket:
 
-```typescript
-investigate({
-  error,
-  userId: new ContextItem(userId, 'The authenticated user ID'),
-  getData: new ContextCallable(getData, 'Function to fetch user data')
-});
-```
+1. **Socket Setup**: Library starts Hono HTTP server listening on UDS socket
+2. **CLI Invocation**: Library spawns CLI subprocess, passes socket path as command-line argument
+3. **Socket Communication**: CLI connects to Hono server via HTTP requests
+4. **Task Fetch**: CLI fetches implementation prompt and schema via `GET /task`
+5. **Tool Delegation**: MCP server delegates tool calls to HTTP endpoints (`POST /eval`, `POST /complete`)
+6. **Result Return**: CLI outputs result to stdout after successful implementation
 
-### Structured Stderr Protocol
+### Task Context Flow
 
-All stderr output is JSON with a `type` discriminator:
-- `server_started`: MCP server URL
-- `log`: General messages
-- `turn`: Claude turn completed
-- `tool_call`: Claude called an MCP tool
-- `tool_result`: MCP tool execution result
-- `summary`: Final statistics (turns, tokens, finishReason, toolCallsCount, warnings)
+The library sends task details to the CLI HTTP server:
+1. **Instruction**: What to implement (the main prompt)
+2. **Schema**: Expected output shape in JSON Schema format
+3. **Context**: Variables available during implementation (with types)
+4. **CallStack**: Stack frames showing where implement() was called
+5. **Timestamp & PID**: Execution context information
 
-The launcher parses these and makes them available via the `stderr` async iterator.
+The CLI fetches these via `GET /task` and renders them into a full prompt using Mustache templates from `strings.ts`.
 
-### Dynamic Prompt Generation
+### Transcript Caching
 
-The launcher sends structured JSON input to the CLI containing:
-- Call stack frames (file paths, line numbers, function names)
-- Context items (variable names, types, descriptions)
-- Timestamp and PID
-- User's `extraInstructions` if provided
+When an implementation succeeds, the transcript is saved with a cache key based on:
+- **Instruction text** (main requirement, stable across runs)
+- **Schema** (defines expected output shape)
 
-The CLI renders this data into a prompt using Mustache templates from `strings.ts`.
+The cache key slug is derived from the instruction text (first 50 chars, lowercase, underscores), making cache hits deterministic. On subsequent calls with the same instruction+schema, the cached transcript is replayed without re-invoking Claude.
+
+### Hono Server with Endpoints
+
+The library creates an HTTP server via `@hono/node-server` with endpoints:
+
+- **`GET /task`**: Returns implementation task details (prompt, schema, context)
+- **`POST /eval`**: Executes code in a sandbox VM and returns results
+- **`POST /complete`**: Handles both success (set_result) and failure (bail):
+  - Without `failure` flag: Executes code to produce the final result
+  - With `failure: true` flag: Logs error message and exits with failure status
+- **`GET /openapi.json`**: Serves OpenAPI specification for language-agnostic client support
+
+All communication happens over UDS (Unix Domain Socket) for local IPC efficiency.
 
 ### CLI Path Resolution
 
-In development (monorepo), the launcher finds the CLI at:
+In development (monorepo), the library finds the CLI at:
 `packages/klendathu-cli/dist/cli.js`
 
-This is resolved relative to the launcher's import.meta.url.
+This is resolved relative to the library's import.meta.url using `findCliPath()` in `agent-runner.ts`.
 
 ## Build Process
 
@@ -151,7 +183,7 @@ This is resolved relative to the launcher's import.meta.url.
 
 ## Authentication
 
-The CLI uses Claude Agent SDK which requires an API key:
+The CLI uses Claude Agent SDK. To use it, set your API key:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
@@ -159,31 +191,92 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 Get your API key from the [Anthropic Console](https://console.anthropic.com/).
 
+If `ANTHROPIC_API_KEY` is not set, the `query()` call will use the default API key configured in your environment.
+
 ## Testing Philosophy
 
-- Unit tests in `packages/klendathu` for launcher and server logic
-- E2E tests in `packages/e2e-test` use real Claude Agent SDK (requires `ANTHROPIC_API_KEY`)
-- Tests verify: turns, cost
-- Note: Claude Agent SDK doesn't provide token counts or finishReason (these are optional in Summary type)
-- Tests cost money and are slow (~20-40s) as they use real AI APIs
-- Test output written to `/tmp/klendathu-test-{timestamp}/` for debugging
+- E2E integration tests in `packages/e2e-test` for implementation functionality
+- Tests use real Claude Agent SDK (uses API key from environment)
+- Tests verify:
+  - Successful implementation with correct schema validation
+  - Caching and transcript replay
+  - Schema enforcement (result must match Zod schema)
+- Tests cost money (~$0.01-0.05 per test) and are slow (~20-40s) as they use real AI APIs
+- All tests run via `pnpm test` which builds first, ensuring fresh CLI bundle
 
 ## Additional Features
 
-- **`implement.ts`**: Similar to `investigate()` but for AI-driven implementation
-  - Accepts a prompt and Zod schema
-  - Agent must call `set_result` tool with validated result
-  - Returns typed result matching the schema
+- **`implement.ts`**: AI-driven code implementation
+  - Accepts a prompt and Zod schema for desired output
+  - Spawns CLI subprocess that connects to MCP server
+  - Agent implements functionality and validates result against schema
+  - Returns typed result matching the schema with automatic validation
 
-- **`playwright-hook.ts`**: Auto-investigation on Playwright test failures
-  - Use via `klendathu playwright test` (or any test command)
-  - The CLI automatically adds the Playwright hook via NODE_OPTIONS
-  - Intercepts test failures and spawns investigation automatically
-  - Can also use directly: `NODE_OPTIONS="--import=klendathu/playwright-hook" playwright test`
+## Debugging and Tracing
 
-## Future: Multi-Language Support
+### TRACE Logging
 
-The architecture is designed to support Python, Go, etc.:
-1. Each language implements its own MCP server with an `eval` tool
-2. The language-specific library launches the same `klendathu-cli`
-3. The CLI is language-agnostic (just connects to MCP and talks to Claude)
+Enable detailed tracing to debug what Claude receives and how the system works:
+
+```bash
+# Enable TRACE logging
+KLENDATHU_TRACE=1 pnpm test
+
+# View trace output (written to ~/.klendathu/trace.log)
+tail ~/.klendathu/trace.log
+```
+
+### How TRACE Works
+
+`TRACE` is a tagged template literal function defined in `packages/klendathu-utils/src/logging.ts`:
+
+```typescript
+TRACE`Message with ${variable}`
+```
+
+**Features:**
+- **Enable with environment variable**: Set `KLENDATHU_TRACE=1` or `KLENDATHU_TRACE=true`
+- **Template literal syntax**: Use backticks with embedded expressions
+- **Each log line includes**:
+  - ISO timestamp
+  - Process ID
+  - Source file and line number (auto-extracted from error stack trace)
+  - The formatted message
+- **Value handling**:
+  - Error objects: logs message + full stack trace
+  - Objects: serialized with JSON.stringify
+  - Other types: converted to string
+- **Zero overhead when disabled**: If `KLENDATHU_TRACE` is not set, function returns immediately without any logging overhead
+- **File location**: Logs appended to `~/.klendathu/trace.log` (creates directory if needed)
+- **Silent failures**: If file write fails, execution continues uninterrupted
+
+### What Gets Traced
+
+- Full rendered prompts sent to Claude (user-provided requirements + context)
+- MCP server initialization and tool calls
+- Cache operations (hits, misses, saves)
+- Tool calls and results
+- VM context execution
+- CLI process communication
+
+### Files with Tracing
+
+- `packages/klendathu-utils/src/logging.ts` - TRACE function definition
+- `packages/klendathu/src/agent-runner.ts` - Process spawning and communication
+- `packages/klendathu/src/implement.ts` - Implementation execution and schema handling
+- `packages/klendathu-cli/src/server.ts` - MCP server creation and tool execution
+- `packages/klendathu-cli/src/cli.ts` - CLI initialization and agent query execution
+
+## Architecture Notes
+
+The subprocess model (library spawns CLI) enables:
+- **Isolation**: Agent runs in separate process with inherited stdio
+- **Clean IPC**: HTTP over Unix Domain Socket for structured communication
+- **Caching**: Transcript-based caching avoids redundant Claude calls
+- **Flexibility**: CLI could be reused with other agents/languages
+
+The cache hit path:
+1. CLI fetches task details from server
+2. Checks for cached transcript based on instruction + schema
+3. On hit: Replays last successful `set_result` code without agent
+4. On miss: Runs full agent workflow, saves transcript for future use

@@ -11,4 +11,7 @@ export default defineConfig({
     },
     exclude: ['**/node_modules/**', '**/dist/**', '**/test-app/**'],
   },
+  ssr: {
+    external: ['express'],
+  },
 });

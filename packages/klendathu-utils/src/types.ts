@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 // Location in the call stack
-export const StackFrameSchema = z.object({
+const StackFrameSchema = z.object({
   filePath: z.string(),
   line: z.number().optional(),
   column: z.number().optional(),
@@ -11,7 +11,7 @@ export const StackFrameSchema = z.object({
 export type StackFrame = z.infer<typeof StackFrameSchema>;
 
 // Context item metadata (name, type, optional description)
-export const ContextItemSchema = z.object({
+const ContextItemSchema = z.object({
   name: z.string(),
   type: z.string(), // e.g., "Error", "object", "string", "number", etc.
   description: z.string().optional(),
@@ -21,35 +21,22 @@ export type ContextItem = z.infer<typeof ContextItemSchema>;
 
 // Base input that all modes share
 const BaseInputSchema = z.object({
-  mcpUrl: z.string(),
   callStack: z.array(StackFrameSchema),
   context: z.array(ContextItemSchema),
   timestamp: z.string(),
   pid: z.number(),
-  extraInstructions: z.string().optional(),
 });
 
-// Investigate mode input
-export const InvestigateInputSchema = BaseInputSchema.extend({
-  mode: z.literal('investigate'),
-});
-
-// Implement mode input
-export const ImplementInputSchema = BaseInputSchema.extend({
-  mode: z.literal('implement'),
+// Input schema
+export const InputSchema = BaseInputSchema.extend({
   prompt: z.string(),
-  schema: z.record(z.unknown()), // ZodRawShape serialized as JSON
+  schema: z.record(z.unknown()), // JSON Schema object
 });
 
-// Union of all input modes
-export const CliInputSchema = z.discriminatedUnion('mode', [
-  InvestigateInputSchema,
-  ImplementInputSchema,
-]);
+export const CliInputSchema = InputSchema;
 
 export type CliInput = z.infer<typeof CliInputSchema>;
-export type InvestigateInput = z.infer<typeof InvestigateInputSchema>;
-export type ImplementInput = z.infer<typeof ImplementInputSchema>;
+export type ImplementInput = z.infer<typeof InputSchema>;
 
 // Status protocol messages - all stderr output is JSON parseable
 export const StatusMessageSchema = z.discriminatedUnion('type', [

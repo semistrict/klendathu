@@ -1,33 +1,23 @@
 /**
  * klendathu
  *
- * Runtime debugger library. Import this into your Node.js application to enable
- * Claude-powered debugging when exceptions occur.
+ * AI-powered code implementation library. Use Claude to implement functionality based on prompts.
  *
  * @example
  * ```ts
- * import { investigate } from 'klendathu';
+ * import { implement } from 'klendathu';
  *
- * try {
- *   // your code
- * } catch (error) {
- *   await investigate({ error, localVar1, localVar2 });
- * }
+ * const result = await implement(
+ *   'Sort an array in descending order',
+ *   { data: [3, 1, 4, 1, 5] },
+ *   { sorted: z.array(z.number()) }
+ * );
  * ```
  */
 
-export { investigate, ContextItem, ContextCallable } from './launcher.js';
 export { implement } from './implement.js';
-export { createMcpServer } from './server.js';
 export type {
-  DebugContext,
   ImplementContext,
-  ServerOptions,
-  LaunchOptions,
   ImplementOptions,
-  DebuggerPromise,
-  Summary,
-  StatusMessage,
   InferSchemaType,
 } from './types.js';
-export { StatusMessageSchema } from './types.js';
